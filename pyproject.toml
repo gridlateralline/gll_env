@@ -1,9 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "gll_env"
-version = "0.1.0"
-description = "Add your description here"
+authors = [{ name = "ewz - Zurich Municipal Electric Utility"}]
+dynamic = ["version"]
+license = { file = "LICENSE" }
+description = "Multi-agent prosumer grid environment for Jumanji"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
+keywords = ["reinforcement-learning", "python", "jax", "jumanji"]
 dependencies = [
     "jax==0.5.3",
 ]
@@ -13,28 +20,40 @@ cuda12 = ["jax[cuda12]==0.5.3"]
 tpu = ["jax[tpu]==0.5.3"]
 
 [dependency-groups]
-dev = ["mypy", "pre-commit", "pytest"]
+dev = [
+    "pre-commit",
+    "ruff",
+    "ty",
+    "pytest",
+]
 
-[tool.mypy]
-python_version = "3.10"
-warn_redundant_casts = true
-disallow_untyped_defs = true
-strict_equality = true
-follow_imports = "skip"
-ignore_missing_imports = true
+[tool.hatch.version]
+path = "gll_env/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gll_env"]
 
 [tool.ruff]
 line-length = 100
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "N", "W", "RUF", "ANN"]
 ignore = [
-  "E731",   # Allow lambdas to be assigned to variables.
-  "ANN101", # no need to type self
-  "ANN102", # no need to type cls
+  "E731", # Allow lambdas to be assigned to variables.
   "ANN204", # no need for return type for special methods
   "ANN401", # can use Any type
+  "A002", # Argument shadowing a Python builtin.
+  "A003", # Class attribute shadowing a Python builtin.
+  "A005", # Module shadowing a Python builtin.
+  "B017", # assertRaises(Exception): or pytest.raises(Exception) should be considered evil.
 ]
 
-[tool.ruff.lint.pep8-naming]
-ignore-names = ["?"]
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"] # Ignore `F401` (import violations) in all `__init__.py` files.
+
+[tool.ty.environment]
+python-version = "3.10"
+
+[tool.ty.src]
+include = ["gll_env"]
