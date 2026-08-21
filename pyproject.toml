@@ -4,4 +4,37 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-dependencies = []
+dependencies = [
+    "jax==0.5.3",
+]
+
+[project.optional-dependencies]
+cuda12 = ["jax[cuda12]==0.5.3"]
+tpu = ["jax[tpu]==0.5.3"]
+
+[dependency-groups]
+dev = ["mypy", "pre-commit", "pytest"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_redundant_casts = true
+disallow_untyped_defs = true
+strict_equality = true
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["A", "B", "E", "F", "I", "N", "W", "RUF", "ANN"]
+ignore = [
+  "E731",   # Allow lambdas to be assigned to variables.
+  "ANN101", # no need to type self
+  "ANN102", # no need to type cls
+  "ANN204", # no need for return type for special methods
+  "ANN401", # can use Any type
+]
+
+[tool.ruff.lint.pep8-naming]
+ignore-names = ["?"]
