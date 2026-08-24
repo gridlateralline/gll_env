@@ -13,16 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Configuration utilities for hg_env.
+"""Safetensors serialization utilities for gll_env assets.
 
 This module provides utilities for:
 1. Saving/loading JAX arrays to/from safetensors (for grid topology)
 2. Loading configuration for environment instantiation
 
-Asset generation is in assets_generator.py to keep pandapower optional.
+Grid asset generation is in grid_asset_generator.py to keep pandapower optional.
 """
 
 from importlib import resources
+from os import PathLike
+from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
@@ -30,9 +32,20 @@ import numpy as np
 import safetensors.numpy as stn
 
 
-def save_arrays(
+def _resolve_asset_file(name: str, asset_dir: str | PathLike[str]) -> Any:
+    """Resolve an asset from a package resource or a filesystem directory."""
+    filename = name + ".safetensors"
+    if isinstance(asset_dir, PathLike):
+        return Path(asset_dir).joinpath(filename)
+    try:
+        return resources.files(asset_dir).joinpath(filename)
+    except (ModuleNotFoundError, TypeError):
+        return Path(asset_dir).joinpath(filename)
+
+
+def save_asset_arrays(
     name: str,
-    asset_dir: str,
+    asset_dir: str | PathLike[str],
     **items: Any,
 ) -> None:
     """Save multiple arrays to a single safetensors file.
@@ -42,13 +55,13 @@ def save_arrays(
     asset_name :  str
         Name of the asset (e.g., "case9") to create
     asset_dir : str
-        Name of the asset directory (e.g., "grid_physical.assets") to save to
+    Name of the asset directory (e.g., "gll_env.grid_assets") to save to
     **items
         Named items to save, e.g., admittance=Y, slack_id=slack
 
     Examples
     --------
-    >>> save_arrays(
+    >>> save_asset_arrays(
     ...     name="case9",
     ...     asset_dir="grid_physical.assets",
     ...     admittance=Ybus,
@@ -70,8 +83,7 @@ def save_arrays(
     arrays_np = {k: np.asarray(v) for k, v in arrays_jnp.items()}
 
     # Compute output path using importlib.resources
-    filename = name + ".safetensors"
-    output_file = resources.files(asset_dir).joinpath(filename)
+    output_file = _resolve_asset_file(name, asset_dir)
 
     # Save arrays to safetensors file
     with resources.as_file(output_file) as output_path:
@@ -79,9 +91,9 @@ def save_arrays(
     print(f"Saved arrays to {output_file}")
 
 
-def load_arrays(
+def load_asset_arrays(
     name: str,
-    asset_dir: str,
+    asset_dir: str | PathLike[str],
 ) -> dict[str, jnp.ndarray]:
     """Load arrays from safetensors file.
 
@@ -90,7 +102,7 @@ def load_arrays(
     name : str
         Name of the asset (e.g., "case9") to load.
     asset_dir : str
-        Name of the asset directory (e.g., "grid_physical.assets") to load from
+    Name of the asset directory (e.g., "gll_env.grid_assets") to load from
 
     Returns
     -------
@@ -99,13 +111,12 @@ def load_arrays(
 
     Examples
     --------
-    >>> arrays = load_arrays("case9", asset_dir="grid_physical.assets")
+    >>> arrays = load_asset_arrays("case9", asset_dir="gll_env.grid_assets")
     >>> Ybus = arrays["admittance"]
     >>> slack = arrays["slack_id"]
     """
     # Compute output path using importlib.resources
-    filename = name + ".safetensors"
-    input_file = resources.files(asset_dir).joinpath(filename)
+    input_file = _resolve_asset_file(name, asset_dir)
 
     # Check if the file exists before loading
     if not input_file.is_file():
