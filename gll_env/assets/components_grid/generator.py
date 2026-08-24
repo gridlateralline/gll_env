@@ -24,7 +24,7 @@ Functions:
     - generate_and_save_cigre_lv_consumer_grid_asset(): Generate and save CIGRE LV.
 
 Pandapower is optional - only needed to generate new assets.
-Pre-generated assets are stored in gll_env/grid_assets for regular use.
+Pre-generated grid assets are stored alongside this module.
 """
 
 import json
@@ -35,7 +35,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from gll_env.algorithms.newton_raphson import NewtonRaphson
-from gll_env.asset_serialization import save_asset_arrays
+from gll_env.assets.serialization import save_asset_arrays
 from gll_env.components.grid import GridDynamics
 
 try:
@@ -52,7 +52,7 @@ except ImportError:
     HAS_PANDAPOWER = False
 
 # Package path to the bundled safetensors grid assets.
-GRID_ASSETS_DIR = Path(__file__).with_name("grid_assets")
+GRID_ASSETS_DIR = Path(__file__).parent
 
 
 def _validate_pandapower_internals(net: Any) -> None:

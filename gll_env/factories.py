@@ -16,7 +16,7 @@
 """Config-to-component factories using OmegaConf values.
 
 Everything in ``components/``, ``algorithms/``, and
-``grid_asset_generator.py`` is pure Python/JAX with no config dependency;
+``assets.components_grid.generator`` is pure Python/JAX with no config dependency;
 construct objects directly in tests.
 
 Every physical parameter here is consumed in the same physical units
@@ -77,7 +77,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from gll_env.algorithms.newton_raphson import NewtonRaphson
 from gll_env.algorithms.radial_projection import RadialProjection
-from gll_env.asset_serialization import load_asset_arrays
+from gll_env.assets.serialization import load_asset_arrays
 from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics
 from gll_env.components.environment import EnvironmentModel
@@ -87,7 +87,7 @@ from gll_env.components.load import LoadDynamics
 from gll_env.components.prosumer import ProsumerDynamics
 from gll_env.components.solar import SolarDynamics
 
-GRID_ASSETS_DIR = Path(__file__).with_name("grid_assets")
+GRID_ASSETS_DIR = Path(__file__).with_name("assets").joinpath("components_grid")
 
 
 def _broadcast(value: Any, shape: tuple[int, ...]) -> jnp.ndarray:

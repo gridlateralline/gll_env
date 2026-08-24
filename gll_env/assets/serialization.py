@@ -19,7 +19,7 @@ This module provides utilities for:
 1. Saving/loading JAX arrays to/from safetensors (for grid topology)
 2. Loading configuration for environment instantiation
 
-Grid asset generation is in grid_asset_generator.py to keep pandapower optional.
+Grid asset generation is in assets.components_grid.generator to keep pandapower optional.
 """
 
 from importlib import resources
@@ -55,7 +55,7 @@ def save_asset_arrays(
     asset_name :  str
         Name of the asset (e.g., "case9") to create
     asset_dir : str
-    Name of the asset directory (e.g., "gll_env.grid_assets") to save to
+    Name of the asset directory (e.g., "gll_env.assets.components_grid") to save to
     **items
         Named items to save, e.g., admittance=Y, slack_id=slack
 
@@ -102,7 +102,7 @@ def load_asset_arrays(
     name : str
         Name of the asset (e.g., "case9") to load.
     asset_dir : str
-    Name of the asset directory (e.g., "gll_env.grid_assets") to load from
+    Name of the asset directory (e.g., "gll_env.assets.components_grid") to load from
 
     Returns
     -------
@@ -111,7 +111,7 @@ def load_asset_arrays(
 
     Examples
     --------
-    >>> arrays = load_asset_arrays("case9", asset_dir="gll_env.grid_assets")
+    >>> arrays = load_asset_arrays("case9", asset_dir="gll_env.assets.components_grid")
     >>> Ybus = arrays["admittance"]
     >>> slack = arrays["slack_id"]
     """
