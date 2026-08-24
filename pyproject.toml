@@ -12,7 +12,10 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 keywords = ["reinforcement-learning", "python", "jax", "jumanji"]
 dependencies = [
+    "chex>=0.1.90",
     "jax==0.5.3",
+    "jumanji>=1.1.2",
+    "safetensors>=0.8.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +28,7 @@ dev = [
     "ruff",
     "ty",
     "pytest",
+    "pandapower>=3.5.4",
 ]
 
 [tool.hatch.version]
@@ -32,6 +36,10 @@ path = "gll_env/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["gll_env"]
+exclude = ["**/*_test.py"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["**/*_test.py"]
 
 [tool.ruff]
 line-length = 100
@@ -57,3 +65,23 @@ python-version = "3.10"
 
 [tool.ty.src]
 include = ["gll_env"]
+
+[tool.ty.rules]
+# Disabled because of JAX/NumPy array typing through chex aliases (`chex.Array`, `chex.Numeric`,
+# ...), which resolve to broad unions like `Array | ndarray | numpy.bool | number`. The scalar
+# members of those unions are not subscriptable, lack JAX's `.at` accessor and do not support
+# array operators, so a static checker reports ~1800 false positives on otherwise-correct array
+# code. These are the only rules disabled for the array-typing limitation; re-enable them per-rule
+# as the codebase is incrementally annotated with stricter array types.
+not-subscriptable = "ignore"
+unsupported-operator = "ignore"
+not-iterable = "ignore"
+unresolved-attribute = "ignore"
+invalid-argument-type = "ignore"
+invalid-assignment = "ignore"
+invalid-return-type = "ignore"
+# Not array-related: jumanji deliberately refines abstract method signatures in subclasses
+# (`RewardFn`/`Generator`/`Agent`/`Viewer`/`ParametricDistribution` `__call__`/`step`/`render`/...)
+# and narrows `__eq__`/`__add__` on specs and namedtuples. ty flags all 44 intentional overrides
+# as incompatible; disabled project-wide rather than suppressed at each of the 44 call sites.
+invalid-method-override = "ignore"
