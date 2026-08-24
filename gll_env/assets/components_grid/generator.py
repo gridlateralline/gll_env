@@ -98,6 +98,20 @@ def _extract_admittance_and_topology(
     pv_id = jnp.array(internal["pv"], dtype=jnp.int32)
     pq_id = jnp.array(internal["pq"], dtype=jnp.int32)
 
+    n_bus = admittance.shape[0]
+    topology = np.concatenate([np.asarray(slack_id), np.asarray(pv_id), np.asarray(pq_id)])
+    if slack_id.size != 1:
+        raise ValueError(f"Expected exactly one slack bus, found {slack_id.size}")
+    if topology.size != n_bus:
+        raise ValueError(
+            "Bus partitions must cover every internal bus exactly once: "
+            f"{topology.size} entries for {n_bus} buses"
+        )
+    if np.any(topology < 0) or np.any(topology >= n_bus):
+        raise ValueError(f"Bus topology contains an index outside [0, {n_bus})")
+    if np.unique(topology).size != topology.size:
+        raise ValueError("Slack, PV, and PQ bus partitions must be disjoint")
+
     return admittance, slack_id, pv_id, pq_id
 
 

@@ -26,7 +26,7 @@ def build_solar() -> SolarDynamics:
         clearness_reversion=jnp.float32(0.2),
         clearness_mean=jnp.float32(0.6),
         clearness_std=jnp.float32(0.1),
-        time=DaytimeDynamics(n_steps_per_day=jnp.int32(4)),
+        time=DaytimeDynamics(n_steps_per_day=jnp.int32(12)),
     )
 
 
@@ -38,15 +38,17 @@ def test_cosine_profile_and_power_to_energy_conversion() -> None:
     assert jnp.allclose(solar._available_fraction(jnp.float32(0.5), clearness), clearness)
     assert jnp.allclose(
         solar._available_energy(jnp.float32(0.5), clearness),
-        jnp.array([6.0, 24.0], dtype=jnp.float32),
+        jnp.array([2.0, 8.0], dtype=jnp.float32),
     )
 
 
 def test_step_clips_generation_and_advances_clearness() -> None:
     solar = build_solar()
-    time_state = DaytimeState(day_progress=jnp.float32(0.5), day_step=jnp.int32(2))
+    time_state = DaytimeState(
+        interval_start=jnp.float32(0.5), interval_end=jnp.float32(0.75), day_step=jnp.int32(2)
+    )
     clearness = jnp.array([0.5, 1.0], dtype=jnp.float32)
-    maximum = solar._available_energy(time_state.day_progress, clearness)
+    maximum = solar._available_energy(time_state.interval_midpoint, clearness)
     state = SolarState(
         sol_realized_kwh=jnp.zeros((2,), dtype=jnp.float32),
         sol_request_constraint=solar._new_request_constraint(maximum),
@@ -57,7 +59,8 @@ def test_step_clips_generation_and_advances_clearness() -> None:
 
     next_state = solar.step(state, jnp.array([-1.0, 100.0], dtype=jnp.float32))
 
-    assert jnp.allclose(next_state.sol_realized_kwh, jnp.array([0.0, 24.0]))
+    assert jnp.allclose(jnp.take(next_state.sol_realized_kwh, 0), 0.0)
+    assert jnp.allclose(jnp.take(next_state.sol_realized_kwh, 1), jnp.take(maximum, 1))
     assert jnp.all(next_state.clearness >= 0.0)
     assert jnp.all(next_state.clearness <= 1.0)
     assert int(next_state.time_state.day_step) == 3
@@ -68,9 +71,11 @@ def test_reset_returns_finite_bounded_state() -> None:
 
     state = solar.reset(
         jr.PRNGKey(1),
-        time_state=DaytimeState(day_progress=jnp.float32(0.5), day_step=jnp.int32(2)),
+        time_state=DaytimeState(
+            interval_start=jnp.float32(0.5), interval_end=jnp.float32(0.75), day_step=jnp.int32(2)
+        ),
     )
-    observation = solar.observation(state)
+    observation = solar.observation(state).normalize(solar)
 
     assert jnp.all(jnp.isfinite(state.sol_realized_kwh))
     assert jnp.all(state.sol_realized_kwh >= 0.0)

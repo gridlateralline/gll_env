@@ -39,11 +39,40 @@ class LoadState:
 
 @chex.dataclass(frozen=True)
 class LoadObservation:
-    p_load_realized: chex.Array  # (num_load,) float32 in [0, 1]
-    q_load_realized: chex.Array  # (num_load,) float32 in [0, 1]
-    p_load_forecast: chex.Array  # (num_load,) float32 in [0, 1] -- coming interval
-    q_load_forecast: chex.Array  # (num_load,) float32 in [0, 1] -- coming interval
-    load_factor: chex.Array  # (num_load,) float32 in [0, 1]
+    """Observation of past and forecast load energy.
+
+    Attributes:
+        p_load_realized: Past-interval active load energy. Unnormalized values
+            are in kWh; normalized values are in ``[0, 1]``.
+        q_load_realized: Past-interval reactive load energy. Unnormalized
+            values are in kvarh; normalized values are in ``[0, 1]``.
+        p_load_forecast: Coming-interval active load energy, with the same
+            raw and normalized ranges as ``p_load_realized``.
+        q_load_forecast: Coming-interval reactive load energy, with the same
+            raw and normalized ranges as ``q_load_realized``.
+        load_factor: Dimensionless load factor, always represented in
+            ``[0, 1]``.
+        is_normalized: Whether the physical energy fields are normalized.
+            Defaults to ``False``.
+    """
+
+    p_load_realized: chex.Array  # (num_load,) float32 -- past interval
+    q_load_realized: chex.Array  # (num_load,) float32 -- past interval
+    p_load_forecast: chex.Array  # (num_load,) float32 -- coming interval
+    q_load_forecast: chex.Array  # (num_load,) float32 -- coming interval
+    load_factor: chex.Array  # (num_load,) float32 -- coming interval
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, load_dynamics: "LoadDynamics") -> "LoadObservation":
+        s_load_max_kvah = load_dynamics.s_load_max_kvah
+        return LoadObservation(
+            p_load_realized=safe_normalize(self.p_load_realized, s_load_max_kvah),
+            q_load_realized=safe_normalize(self.q_load_realized, s_load_max_kvah),
+            p_load_forecast=safe_normalize(self.p_load_forecast, s_load_max_kvah),
+            q_load_forecast=safe_normalize(self.q_load_forecast, s_load_max_kvah),
+            load_factor=self.load_factor,
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -298,12 +327,11 @@ class LoadDynamics:
         object.__setattr__(self, "power_factor", jnp.clip(self.power_factor, 1e-6, 1.0))
 
     def observation(self, state: LoadState) -> LoadObservation:
-        s_load_max_kvah = self.s_load_max_kvah
         return LoadObservation(
-            p_load_realized=safe_normalize(state.s_load_realized_kvah.real, s_load_max_kvah),
-            q_load_realized=safe_normalize(state.s_load_realized_kvah.imag, s_load_max_kvah),
-            p_load_forecast=safe_normalize(state.s_load_kvah.real, s_load_max_kvah),
-            q_load_forecast=safe_normalize(state.s_load_kvah.imag, s_load_max_kvah),
+            p_load_realized=state.s_load_realized_kvah.real,
+            q_load_realized=state.s_load_realized_kvah.imag,
+            p_load_forecast=state.s_load_kvah.real,
+            q_load_forecast=state.s_load_kvah.imag,
             load_factor=safe_normalize(state.load_factor, self._load_factor_max),
         )
 
@@ -358,6 +386,8 @@ class LoadDynamics:
         return p_load_kwh * self._reactive_to_active_ratio
 
     def _new_s_load_kvah(self, day_progress: chex.Numeric, load_factor: chex.Array) -> chex.Array:
+        # Primary operation uses 15-minute steps, so midpoint sampling of H0
+        # is intentionally retained as a constant-over-an-interval estimate.
         p_load_kwh = self._new_p_load_kwh(day_progress, load_factor)  # per fixed H0 slot (0.25h)
         q_load_kvarh = self._new_q_load_kvarh(p_load_kwh)
         s_load_kvah = p_load_kwh + 1j * q_load_kvarh  # still per H0 slot, not per sim step
@@ -383,7 +413,9 @@ class LoadDynamics:
         key, subkey = jr.split(key)
         time_state_prev = self.time.previous(time_state)
         load_factor_prev = self._reset_load_factor(subkey)
-        s_load_kvah_prev = self._new_s_load_kvah(time_state_prev.day_progress, load_factor_prev)
+        s_load_kvah_prev = self._new_s_load_kvah(
+            time_state_prev.interval_midpoint, load_factor_prev
+        )
 
         fictional_prev_state = LoadState(
             s_load_realized_kvah=jnp.zeros_like(
@@ -403,7 +435,9 @@ class LoadDynamics:
             self.time.step(state.time_state) if next_time_state is None else next_time_state
         )
         next_load_factor = self._new_load_factor(state.load_factor, subkey)
-        next_s_load_kvah = self._new_s_load_kvah(next_time_state.day_progress, next_load_factor)
+        next_s_load_kvah = self._new_s_load_kvah(
+            next_time_state.interval_midpoint, next_load_factor
+        )
         # The interval that just ended consumed exactly what the incoming
         # state's s_load_kVAh said it would -- exogenous, no request/clip
         # step, same relationship as solar's sol_realized_kWh has to the

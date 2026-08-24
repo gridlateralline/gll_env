@@ -40,9 +40,29 @@ class SolarState:
 
 @chex.dataclass(frozen=True)
 class SolarObservation:
-    sol_realized: chex.Array  # (num_sol,) float32 in [0, 1] -- past interval
-    sol_available: chex.Array  # (num_sol,) float32 in [0, 1] -- coming interval
-    sol_clearness: chex.Array  # (num_sol,) float32 in [0, 1]
+    """Observation of past realized and upcoming available solar energy.
+
+    Attributes:
+        sol_realized: Past-interval solar generation. Unnormalized values are
+            in ``[0, s_sol_max_kwh]``; normalized values are in ``[0, 1]``.
+        sol_available: Coming-interval available solar generation with the
+            same range as ``sol_realized``.
+        sol_clearness: Coming-interval clearness index in ``[0, 1]``.
+        is_normalized: Defaults to ``False``.
+    """
+
+    sol_realized: chex.Array  # (num_sol,) float32 -- past interval
+    sol_available: chex.Array  # (num_sol,) float32 -- coming interval
+    sol_clearness: chex.Array  # (num_sol,) float32 -- coming interval
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, solar_dynamics: "SolarDynamics") -> "SolarObservation":
+        return SolarObservation(
+            sol_realized=safe_normalize(self.sol_realized, solar_dynamics.s_sol_max_kwh),
+            sol_available=safe_normalize(self.sol_available, solar_dynamics.s_sol_max_kwh),
+            sol_clearness=self.sol_clearness,
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -119,7 +139,8 @@ class SolarDynamics:
         return fraction * jnp.asarray(self.peak_power_kw)
 
     def _available_energy(self, day_progress: chex.Numeric, clearness: chex.Array) -> chex.Array:
-        # Energy = power * duration
+        # Primary operation uses 15-minute steps, so midpoint power is a
+        # constant-over-an-interval approximation.
         available_power = self._available_power(day_progress, clearness)
         return available_power * self.time.step_duration_h
 
@@ -169,8 +190,10 @@ class SolarDynamics:
 
     def observation(self, state: SolarState) -> SolarObservation:
         return SolarObservation(
-            sol_realized=safe_normalize(state.sol_realized_kwh, self.s_sol_max_kwh),
-            sol_available=self._available_fraction(state.time_state.day_progress, state.clearness),
+            sol_realized=state.sol_realized_kwh,
+            sol_available=self._available_energy(
+                state.time_state.interval_midpoint, state.clearness
+            ),
             sol_clearness=state.clearness,
         )
 
@@ -182,7 +205,7 @@ class SolarDynamics:
         key, clear_key = jr.split(key)
         time_state_prev = self.time.previous(time_state)
         clearness_prev = self._reset_clearness(key=clear_key)
-        max_kwh_prev = self._available_energy(time_state_prev.day_progress, clearness_prev)
+        max_kwh_prev = self._available_energy(time_state_prev.interval_midpoint, clearness_prev)
         request_constraint_prev = self._new_request_constraint(max_kwh_prev)
         state_prev = SolarState(
             sol_realized_kwh=jnp.zeros((self.num_sol,), jnp.float32),  # unused, overwritten in step
@@ -207,7 +230,7 @@ class SolarDynamics:
             self.time.step(state.time_state) if next_time_state is None else next_time_state
         )
         next_clearness = self._new_clearness(state.clearness, subkey)
-        max_kwh = self._available_energy(next_time_state.day_progress, next_clearness)
+        max_kwh = self._available_energy(next_time_state.interval_midpoint, next_clearness)
         next_request_constraint = self._new_request_constraint(max_kwh)
 
         return SolarState(

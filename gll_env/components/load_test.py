@@ -45,8 +45,12 @@ def test_profile_energy_and_reactive_energy_use_correct_units() -> None:
 
 def test_step_realizes_previous_forecast_and_clamps_load_factor() -> None:
     load = build_load()
-    time_state = DaytimeState(day_progress=jnp.float32(0.5), day_step=jnp.int32(48))
-    forecast = load._new_s_load_kvah(time_state.day_progress, jnp.array([1.0, 1.0]))
+    time_state = DaytimeState(
+        interval_start=jnp.float32(0.5),
+        interval_end=jnp.float32(49.0 / 96.0),
+        day_step=jnp.int32(48),
+    )
+    forecast = load._new_s_load_kvah(time_state.interval_midpoint, jnp.array([1.0, 1.0]))
     state = LoadState(
         s_load_realized_kvah=jnp.zeros((2,), dtype=jnp.complex64),
         s_load_kvah=forecast,
@@ -68,7 +72,11 @@ def test_reset_returns_a_consistent_finite_state() -> None:
 
     state = load.reset(
         jr.PRNGKey(1),
-        time_state=DaytimeState(day_progress=jnp.float32(0.25), day_step=jnp.int32(24)),
+        time_state=DaytimeState(
+            interval_start=jnp.float32(0.25),
+            interval_end=jnp.float32(25.0 / 96.0),
+            day_step=jnp.int32(24),
+        ),
     )
     observation = load.observation(state)
 

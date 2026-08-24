@@ -37,18 +37,18 @@ Component tree::
     │   └── NewtonRaphson (inner solver)
     └── ProsumerDynamics (orchestrator)
         ├── LoadDynamics
-        ├── RadialProjection (shared with InverterDynamics below; solves
+        ├── RadialFeasibility (shared with InverterDynamics below; solves
         │   against the augmented constraint in ProsumerDynamics)
         └── InverterDynamics (orchestrator)
             ├── BatteryDynamics
             ├── SolarDynamics
-            └── RadialProjection (same instance as Prosumer's own; solves
+            └── RadialFeasibility (same instance as Prosumer's own; solves
                 against its smaller, un-augmented constraint)
 
 Config layout::
 
     n_steps_per_day: 96
-    tolerance: 1.0e-6                # optional shared RadialProjection tolerance
+    tolerance: 1.0e-6                # optional shared RadialFeasibility tolerance
     grid:
         grid_model: cigre_lv_consumer   # asset name
         newton_raphson: {max_iterations: 10, tolerance: 1.0e-4}   # optional
@@ -76,7 +76,7 @@ import jax.numpy as jnp
 from omegaconf import DictConfig, OmegaConf
 
 from gll_env.algorithms.newton_raphson import NewtonRaphson
-from gll_env.algorithms.radial_projection import RadialProjection
+from gll_env.algorithms.radial_feasibility import RadialFeasibility
 from gll_env.assets.serialization import load_asset_arrays
 from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics
@@ -106,9 +106,9 @@ def newton_raphson(config: DictConfig) -> NewtonRaphson:
     )
 
 
-def radial_projection(tolerance: float) -> RadialProjection:
-    """Build the :class:`RadialProjection` shared by Prosumer and Inverter."""
-    return RadialProjection(tolerance=tolerance)
+def radial_feasibility(tolerance: float) -> RadialFeasibility:
+    """Build the :class:`RadialFeasibility` shared by Prosumer and Inverter."""
+    return RadialFeasibility(tolerance=tolerance)
 
 
 def daytime_dynamics(n_steps_per_day: int) -> DaytimeDynamics:
@@ -141,8 +141,8 @@ def battery_dynamics(config: DictConfig, num_inv: int, time: DaytimeDynamics) ->
     shape = (num_inv,)
     return BatteryDynamics(
         capacity_kwh=_broadcast(config.capacity_kWh, shape),
-        peak_charge_kw=_broadcast(config.peak_charge_kW, shape),
-        peak_discharge_kw=_broadcast(config.peak_discharge_kW, shape),
+        charge_rating_kw=_broadcast(config.peak_charge_kW, shape),
+        discharge_rating_kw=_broadcast(config.peak_discharge_kW, shape),
         time=time,
     )
 
@@ -190,13 +190,13 @@ def inverter_dynamics(
     config: DictConfig,
     num_inv: int,
     time: DaytimeDynamics,
-    projection: RadialProjection | None,
+    projection: RadialFeasibility | None,
 ) -> InverterDynamics:
     """Build the inverter orchestrator.
 
     Config: ``s_inv_max_kVA`` (scalar or per-inverter list), ``battery``,
     ``solar`` (sub-configs). ``projection`` is the shared
-    :class:`RadialProjection` built once in :func:`environment_model` from
+    :class:`RadialFeasibility` built once in :func:`environment_model` from
     the top-level ``tolerance`` -- ``None`` (no top-level ``tolerance``
     given) is passed straight through so ``InverterDynamics`` falls back to
     its own field default instead.
@@ -215,7 +215,7 @@ def prosumer_dynamics(
     config: DictConfig,
     num_pq: int,
     time: DaytimeDynamics,
-    projection: RadialProjection | None = None,
+    projection: RadialFeasibility | None = None,
 ) -> ProsumerDynamics:
     """Build the prosumer orchestrator.
 
@@ -252,14 +252,14 @@ def environment_model(config: DictConfig) -> EnvironmentModel:
     ``n_steps_per_day`` and shared by every sub-component, matching the
     invariant every ``__post_init__`` in this tree already asserts (all
     share one clock). Likewise, if ``tolerance`` is given, a single
-    :class:`RadialProjection` is built once and shared by ``ProsumerDynamics``
+    :class:`RadialFeasibility` is built once and shared by ``ProsumerDynamics``
     and its ``InverterDynamics``; if omitted, both fall back independently
     to their own field default (``1e-4``, matching ``NewtonRaphson``'s own
     default) rather than being forced to agree on one.
     """
     time = daytime_dynamics(config.n_steps_per_day)
     grid = grid_dynamics(config.grid, time)
-    projection = radial_projection(float(config.tolerance)) if "tolerance" in config else None
+    projection = radial_feasibility(float(config.tolerance)) if "tolerance" in config else None
     prosumer = prosumer_dynamics(
         config.prosumer, num_pq=grid.num_pq, time=time, projection=projection
     )

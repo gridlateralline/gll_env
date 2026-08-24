@@ -25,11 +25,11 @@ from gll_env.components.solar import SolarDynamics
 
 
 def build_prosumer(s_pq_max_kva: jnp.ndarray | None = None) -> ProsumerDynamics:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     battery = BatteryDynamics(
         capacity_kwh=jnp.array([10.0], dtype=jnp.float32),
-        peak_charge_kw=jnp.array([1.0], dtype=jnp.float32),
-        peak_discharge_kw=jnp.array([2.0], dtype=jnp.float32),
+        charge_rating_kw=jnp.array([1.0], dtype=jnp.float32),
+        discharge_rating_kw=jnp.array([2.0], dtype=jnp.float32),
         time=time,
     )
     solar = SolarDynamics(peak_power_kw=jnp.array([2.0], dtype=jnp.float32), time=time)
@@ -69,11 +69,11 @@ def test_negative_grid_connection_is_clamped_to_load_rating() -> None:
 
 
 def test_zero_rating_prosumer_has_finite_observation() -> None:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     zero_battery = BatteryDynamics(
         capacity_kwh=jnp.array([0.0], dtype=jnp.float32),
-        peak_charge_kw=jnp.array([0.0], dtype=jnp.float32),
-        peak_discharge_kw=jnp.array([0.0], dtype=jnp.float32),
+        charge_rating_kw=jnp.array([0.0], dtype=jnp.float32),
+        discharge_rating_kw=jnp.array([0.0], dtype=jnp.float32),
         time=time,
     )
     zero_solar = SolarDynamics(peak_power_kw=jnp.array([0.0], dtype=jnp.float32), time=time)

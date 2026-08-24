@@ -23,11 +23,11 @@ from gll_env.components.solar import SolarDynamics
 
 
 def build_inverter() -> InverterDynamics:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     battery = BatteryDynamics(
         capacity_kwh=jnp.array([10.0, 8.0], dtype=jnp.float32),
-        peak_charge_kw=jnp.array([1.0, 2.0], dtype=jnp.float32),
-        peak_discharge_kw=jnp.array([2.0, 1.0], dtype=jnp.float32),
+        charge_rating_kw=jnp.array([1.0, 2.0], dtype=jnp.float32),
+        discharge_rating_kw=jnp.array([2.0, 1.0], dtype=jnp.float32),
         time=time,
     )
     solar = SolarDynamics(
@@ -99,13 +99,13 @@ def test_dispatch_maximizes_solar_before_using_battery() -> None:
 
 
 def test_zero_rating_has_finite_observation() -> None:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     inverter = InverterDynamics(
         s_inv_max_kva=jnp.array([0.0], dtype=jnp.float32),
         battery_dynamics=BatteryDynamics(
             capacity_kwh=jnp.array([0.0], dtype=jnp.float32),
-            peak_charge_kw=jnp.array([0.0], dtype=jnp.float32),
-            peak_discharge_kw=jnp.array([0.0], dtype=jnp.float32),
+            charge_rating_kw=jnp.array([0.0], dtype=jnp.float32),
+            discharge_rating_kw=jnp.array([0.0], dtype=jnp.float32),
             time=time,
         ),
         solar_dynamics=SolarDynamics(
@@ -128,13 +128,13 @@ def test_zero_rating_has_finite_observation() -> None:
 
 
 def test_negative_rating_is_clamped_to_zero() -> None:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     inverter = InverterDynamics(
         s_inv_max_kva=jnp.array([-5.0], dtype=jnp.float32),
         battery_dynamics=BatteryDynamics(
             capacity_kwh=jnp.array([1.0], dtype=jnp.float32),
-            peak_charge_kw=jnp.array([1.0], dtype=jnp.float32),
-            peak_discharge_kw=jnp.array([1.0], dtype=jnp.float32),
+            charge_rating_kw=jnp.array([1.0], dtype=jnp.float32),
+            discharge_rating_kw=jnp.array([1.0], dtype=jnp.float32),
             time=time,
         ),
         solar_dynamics=SolarDynamics(peak_power_kw=jnp.array([1.0], dtype=jnp.float32), time=time),

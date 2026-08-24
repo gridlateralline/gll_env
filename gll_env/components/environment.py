@@ -44,7 +44,7 @@ import jax.numpy as jnp
 import jax.random as jr
 from jumanji.env import StateProtocol
 
-from gll_env.components.day_time import DaytimeDynamics, DaytimeState
+from gll_env.components.day_time import DaytimeDynamics, DaytimeObservation, DaytimeState
 from gll_env.components.grid import GridDynamics, GridObservation, GridState
 from gll_env.components.prosumer import (
     ProsumerDynamics,
@@ -70,9 +70,34 @@ class EnvironmentState(StateProtocol):
 
 @chex.dataclass(frozen=True)
 class EnvironmentObservation:
+    """Observation of the environment and its nested component state.
+
+    Attributes:
+        prosumer_observation: Nested prosumer observation, normalized when this
+            observation is normalized.
+        grid_observation: Nested grid observation, normalized when this
+            observation is normalized.
+        time_observation: Nested daytime observation, normalized when this
+            observation is normalized.
+        step_count: Number of completed simulation steps; unchanged by
+            normalization.
+        is_normalized: Defaults to ``False``.
+    """
+
     prosumer_observation: ProsumerObservation
     grid_observation: GridObservation
+    time_observation: DaytimeObservation
     step_count: chex.Numeric  # () int32
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, environment_model: "EnvironmentModel") -> "EnvironmentObservation":
+        return EnvironmentObservation(
+            prosumer_observation=self.prosumer_observation.normalize(environment_model.prosumer),
+            grid_observation=self.grid_observation.normalize(environment_model.grid),
+            time_observation=self.time_observation.normalize(environment_model.time),
+            step_count=self.step_count,
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -134,6 +159,7 @@ class EnvironmentModel:
         return EnvironmentObservation(
             prosumer_observation=self.prosumer.observation(state.prosumer_state),
             grid_observation=self.grid.observation(state.grid_state),
+            time_observation=self.time.observation(state.time_state),
             step_count=state.step_count,
         )
 

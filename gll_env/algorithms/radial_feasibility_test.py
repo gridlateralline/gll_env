@@ -16,8 +16,8 @@
 import jax.numpy as jnp
 import jax.random as jrandom
 
-from gll_env.algorithms.radial_projection import (
-    RadialProjection,
+from gll_env.algorithms.radial_feasibility import (
+    RadialFeasibility,
     project_ball,
     project_halfspace,
 )
@@ -100,7 +100,7 @@ def test_action_constraints_is_feasible_vacuous_with_no_constraints() -> None:
 def test_feasibility_map_radial_projection() -> None:
     key = jrandom.PRNGKey(0)
     batch_size = 1000
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
 
     key, subkey = jrandom.split(key)
     x, constraints = generate_feasible_problem(subkey, batch_size)
@@ -170,18 +170,18 @@ def test_project_ball() -> None:
 def test_radial_projection_default_tolerance() -> None:
     """Field default matches NewtonRaphson's own tolerance default (1e-4),
     so a config that omits both falls back to consistent numbers."""
-    assert RadialProjection().tolerance == 1e-4
+    assert RadialFeasibility().tolerance == 1e-4
 
 
 def test_radial_projection_converges_and_returns_feasible_point() -> None:
-    """Test that RadialProjection.solve lands in the feasible region and reports converged."""
+    """Test that RadialFeasibility.solve lands in the feasible region and reports converged."""
     key = jrandom.PRNGKey(42)
 
     batch_size = 10
     key, subkey = jrandom.split(key)
     x, constraints = generate_feasible_problem(subkey, batch_size)
 
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x_proj, converged = rp.solve(x, constraints)
 
     assert bool(converged)
@@ -189,7 +189,7 @@ def test_radial_projection_converges_and_returns_feasible_point() -> None:
 
 
 def test_radial_projection_single_agent() -> None:
-    """Test RadialProjection.solve with a single agent."""
+    """Test RadialFeasibility.solve with a single agent."""
     x = jnp.array([[2.0, 3.0]])
     constraints = ActionConstraints(
         halfspace_a=jnp.array([[[1.0, 0.0], [0.0, 1.0]]]),
@@ -198,7 +198,7 @@ def test_radial_projection_single_agent() -> None:
         ball_radius=jnp.array([[1.0]]),
     )
 
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x_proj, _ = rp.solve(x, constraints)
 
     assert constraints.is_feasible(x_proj, tol=_TOLERANCE)
@@ -212,7 +212,7 @@ def test_radial_projection_already_feasible_is_a_noop() -> None:
     key, subkey = jrandom.split(key)
     x_infeasible, constraints = generate_feasible_problem(subkey, batch_size)
 
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
 
     # Project once to get a feasible point.
     x_feasible, _ = rp.solve(x_infeasible, constraints)
@@ -234,7 +234,7 @@ def test_radial_projection_origin_is_a_noop() -> None:
     _, constraints = generate_feasible_problem(subkey, batch_size)
 
     origin = jnp.zeros((batch_size, 2))
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x_proj, converged = rp.solve(origin, constraints)
 
     assert bool(converged)
@@ -253,7 +253,7 @@ def test_radial_projection_origin_always_feasible() -> None:
 
 
 def test_radial_projection_no_halfspaces() -> None:
-    """RadialProjection.solve should work with zero halfspace constraints (balls only)."""
+    """RadialFeasibility.solve should work with zero halfspace constraints (balls only)."""
     x = jnp.array([[3.0, 3.0]])
     constraints = ActionConstraints(
         halfspace_a=jnp.zeros((1, 0, 2)),
@@ -262,7 +262,7 @@ def test_radial_projection_no_halfspaces() -> None:
         ball_radius=jnp.array([[1.0]]),
     )
 
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x_proj, _ = rp.solve(x, constraints)
 
     assert constraints.is_feasible(x_proj, tol=_TOLERANCE)
@@ -280,7 +280,7 @@ def test_radial_projection_solves_to_the_true_boundary_not_an_arbitrary_interior
     non-binding), projecting a point far along the positive x-axis must land
     exactly on p_max.
     """
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x = jnp.array([[3.75, 0.0]])
 
     for p_min, p_max in [(-1.25, 1.25), (-0.157, 1.25), (-0.5, 0.5), (-1.25, 0.05)]:
@@ -296,7 +296,7 @@ def test_radial_projection_solves_to_the_true_boundary_not_an_arbitrary_interior
 
 
 def test_radial_projection_no_balls() -> None:
-    """RadialProjection.solve should work with zero ball constraints (halfspaces only)."""
+    """RadialFeasibility.solve should work with zero ball constraints (halfspaces only)."""
     x = jnp.array([[3.0, 3.0]])
     constraints = ActionConstraints(
         halfspace_a=jnp.array([[[1.0, 0.0], [0.0, 1.0]]]),
@@ -305,7 +305,7 @@ def test_radial_projection_no_balls() -> None:
         ball_radius=jnp.zeros((1, 0)),
     )
 
-    rp = RadialProjection(tolerance=_TOLERANCE)
+    rp = RadialFeasibility(tolerance=_TOLERANCE)
     x_proj, _ = rp.solve(x, constraints)
 
     assert constraints.is_feasible(x_proj, tol=_TOLERANCE)

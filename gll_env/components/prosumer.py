@@ -20,7 +20,7 @@ import chex
 import jax.numpy as jnp
 import jax.random as jr
 
-from gll_env.algorithms.radial_projection import RadialProjection
+from gll_env.algorithms.radial_feasibility import RadialFeasibility
 from gll_env.components.day_time import DaytimeDynamics, DaytimeState
 from gll_env.components.inverter import (
     InverterDynamics,
@@ -46,11 +46,36 @@ class ProsumerState:
 
 @chex.dataclass(frozen=True)
 class ProsumerObservation:
-    p_pq_realized: chex.Array  # (num_pq,) float32 in [-1, 1] -- guaranteed when valid
-    q_pq_realized: chex.Array  # (num_pq,) float32 in [-1, 1] -- guaranteed when valid
+    """Observation of past net grid flow and nested component observations.
 
+    Attributes:
+        p_pq_realized: Past-interval active net grid energy. Unnormalized
+            values are in kWh; normalized values are in ``[-1, 1]``.
+        q_pq_realized: Past-interval reactive net grid energy. Unnormalized
+            values are in kvarh; normalized values are in ``[-1, 1]``.
+        inverter_observation: Nested inverter observation, normalized when this
+            observation is normalized.
+        load_observation: Nested load observation, normalized when this
+            observation is normalized.
+        is_normalized: Defaults to ``False``.
+    """
+
+    p_pq_realized: chex.Array  # (num_pq,) float32 -- past interval
+    q_pq_realized: chex.Array  # (num_pq,) float32 -- past interval
     inverter_observation: InverterObservation
     load_observation: LoadObservation
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, prosumer_dynamics: "ProsumerDynamics") -> "ProsumerObservation":
+        return ProsumerObservation(
+            p_pq_realized=safe_normalize(self.p_pq_realized, prosumer_dynamics.s_pq_max_kvah),
+            q_pq_realized=safe_normalize(self.q_pq_realized, prosumer_dynamics.s_pq_max_kvah),
+            inverter_observation=self.inverter_observation.normalize(
+                prosumer_dynamics.inverter_dynamics
+            ),
+            load_observation=self.load_observation.normalize(prosumer_dynamics.load_dynamics),
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -61,7 +86,7 @@ class ProsumerDynamics:
     inverter_dynamics: InverterDynamics
     load_dynamics: LoadDynamics
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)
-    projection: RadialProjection = field(default_factory=RadialProjection)
+    projection: RadialFeasibility = field(default_factory=RadialFeasibility)
 
     @cached_property
     def num_pq(self) -> int:
@@ -149,7 +174,7 @@ class ProsumerDynamics:
         load. Combined with the halfspaces and Ball 1 already being proven
         feasible by construction (see InverterDynamics._inv_bounds_kwh),
         this constraint's origin-feasibility invariant is now proven
-        end-to-end -- the origin_infeasible_branch of RadialProjection.solve()
+        end-to-end -- the origin_infeasible_branch of RadialFeasibility.solve()
         should be unreachable for it.
         """
         inverter_id = jnp.asarray(self.inverter_id, dtype=jnp.int32)
@@ -193,10 +218,9 @@ class ProsumerDynamics:
         return s_inv_extended_kvah - load_state.s_load_realized_kvah
 
     def observation(self, state: ProsumerState) -> ProsumerObservation:
-        s_pq_max_kvah = self.s_pq_max_kvah
         return ProsumerObservation(
-            p_pq_realized=safe_normalize(state.s_pq_realized_kvah.real, s_pq_max_kvah),
-            q_pq_realized=safe_normalize(state.s_pq_realized_kvah.imag, s_pq_max_kvah),
+            p_pq_realized=state.s_pq_realized_kvah.real,
+            q_pq_realized=state.s_pq_realized_kvah.imag,
             inverter_observation=self.inverter_dynamics.observation(state.inverter_state),
             load_observation=self.load_dynamics.observation(state.load_state),
         )

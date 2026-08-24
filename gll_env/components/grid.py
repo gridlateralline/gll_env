@@ -31,6 +31,7 @@ import jax.numpy as jnp
 
 from gll_env.algorithms.newton_raphson import NewtonRaphson
 from gll_env.components.day_time import DaytimeDynamics
+from gll_env.utils import safe_normalize
 
 
 @chex.dataclass(frozen=True)
@@ -51,11 +52,39 @@ class GridState:
 
 @chex.dataclass(frozen=True)
 class GridObservation:
-    # Kept approximately in [-1, 1] for consistent RL-agent input scaling
-    v_bus_mag: chex.Array  # (num_bus,) float32 -- (|v_bus_pu| - 1.0) / v_bus_deviation_pu.
-    v_bus_angle: chex.Array  # (num_bus,) float32 in (-1, 1] -- v_bus_angle_rad / pi.
-    p_inj_bus: chex.Array  # (num_bus,) float32 -- real power injection, already in normalized pu.
-    q_inj_bus: chex.Array  # (num_bus,) float32 -- reactive power injection, pu
+    """Observation of grid voltage and per-unit power-flow state.
+
+    Attributes:
+        v_bus_deviation: Past-interval voltage deviation from the nominal bus voltage.
+            Unnormalized values are in kV; normalized values are the per unit
+            deviation divided by ``v_bus_deviation_ref``.
+        v_bus_angle: Past-interval bus voltage angle. Unnormalized values are in radians;
+            normalized values are in ``[-1, 1]`` after division by pi.
+        p_inj_bus: Past-interval real bus power injection. Unnormalized values are in kW;
+            normalized values are in per-unit power.
+        q_inj_bus: Past-interval reactive bus power injection. Unnormalized values are in
+            kvar; normalized values are in per-unit power.
+        is_normalized: Defaults to ``False``.
+    """
+
+    v_bus_deviation: chex.Array  # (num_bus,) float32 -- past interval
+    v_bus_angle: chex.Array  # (num_bus,) float32 -- past interval
+    p_inj_bus: chex.Array  # (num_bus,) float32 -- past interval
+    q_inj_bus: chex.Array  # (num_bus,) float32 -- past interval
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, grid_dynamics: "GridDynamics") -> "GridObservation":
+        return GridObservation(
+            v_bus_deviation=safe_normalize(
+                self.v_bus_deviation,
+                jnp.asarray(grid_dynamics.base_v_kv, dtype=jnp.float32)
+                * jnp.asarray(grid_dynamics.v_bus_deviation_ref, dtype=jnp.float32),
+            ),
+            v_bus_angle=safe_normalize(self.v_bus_angle, jnp.pi),
+            p_inj_bus=safe_normalize(self.p_inj_bus, grid_dynamics.base_s_mva * 1000.0),
+            q_inj_bus=safe_normalize(self.q_inj_bus, grid_dynamics.base_s_mva * 1000.0),
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -78,8 +107,8 @@ class GridDynamics:
     nr: Newton-Raphson solver instance
     time: DaytimeDynamics — owns the simulation's step duration, used for the
         internal energy<->per-unit-power conversion (see kwh_to_pu).
-    v_bus_deviation_pu: scalar float32 — reference deviation from nominal
-        (1.0 pu) used to scale GridObservation.v_bus_mag into roughly
+    v_bus_deviation_ref: scalar float32 — reference deviation from nominal
+        (1.0 pu) used to scale GridObservation.v_bus_deviation into roughly
         [-1, 1]. NOT an enforced bound -- purely an observation-normalization
         reference, default 0.1 (a common +-10% grid-code operating band).
     """
@@ -93,7 +122,7 @@ class GridDynamics:
     position: chex.Array  # (num_bus, 2) float32
     nr: NewtonRaphson
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)
-    v_bus_deviation_pu: chex.Array = field(default_factory=lambda: jnp.float32(0.1))
+    v_bus_deviation_ref: chex.Array = field(default_factory=lambda: jnp.float32(0.1))
 
     @cached_property
     def num_pq(self) -> int:
@@ -178,7 +207,7 @@ class GridDynamics:
         chex.assert_shape(self.base_v_kv, (self.num_bus,))
         chex.assert_shape(self.admittance, (self.num_bus, self.num_bus))
         chex.assert_shape(self.position, (self.num_bus, 2))
-        chex.assert_shape(self.v_bus_deviation_pu, ())
+        chex.assert_shape(self.v_bus_deviation_ref, ())
         chex.assert_type(self.slack_id, jnp.int32)
         chex.assert_type(self.pq_id, jnp.int32)
         chex.assert_type(self.pv_id, jnp.int32)
@@ -186,8 +215,8 @@ class GridDynamics:
         chex.assert_type(self.base_v_kv, jnp.float32)
         chex.assert_type(self.admittance, jnp.complex64)
         chex.assert_type(self.position, jnp.float32)
-        chex.assert_type(self.v_bus_deviation_pu, jnp.float32)
-        # base_s_mva/base_v_kv/v_bus_deviation_pu are divisors throughout the
+        chex.assert_type(self.v_bus_deviation_ref, jnp.float32)
+        # base_s_mva/base_v_kv/v_bus_deviation_ref are divisors throughout the
         # pu<->physical conversions and the observation normalization below;
         # unlike a component rating, a non-positive base isn't a meaningful
         # "disabled" state, just invalid data, so clamp to a tiny positive
@@ -196,12 +225,12 @@ class GridDynamics:
         tiny = jnp.finfo(jnp.float32).tiny
         object.__setattr__(self, "base_s_mva", jnp.maximum(self.base_s_mva, tiny))
         object.__setattr__(self, "base_v_kv", jnp.maximum(self.base_v_kv, tiny))
-        object.__setattr__(self, "v_bus_deviation_pu", jnp.maximum(self.v_bus_deviation_pu, tiny))
+        object.__setattr__(self, "v_bus_deviation_ref", jnp.maximum(self.v_bus_deviation_ref, tiny))
 
     def to_asset_dict(self) -> dict:
         """Return a dict of arrays suitable for passing to :func:`save_arrays`.
 
-        Deliberately excludes `time`/`v_bus_deviation_pu`: those are runtime
+        Deliberately excludes `time`/`v_bus_deviation_ref`: those are runtime
         simulation/observation settings, not network-topology parameters, so
         they don't belong in the electrical-network asset file.
         """
@@ -217,10 +246,13 @@ class GridDynamics:
 
     def observation(self, state: GridState) -> GridObservation:
         return GridObservation(
-            v_bus_mag=(jnp.abs(state.v_bus_pu) - 1.0) / self.v_bus_deviation_pu,
-            v_bus_angle=jnp.angle(state.v_bus_pu) / jnp.pi,
-            p_inj_bus=state.s_inj_bus_pu.real,
-            q_inj_bus=state.s_inj_bus_pu.imag,
+            v_bus_deviation=jnp.subtract(
+                jnp.asarray(self.pu_to_kv(jnp.abs(state.v_bus_pu)), dtype=jnp.float32),
+                jnp.asarray(self.base_v_kv, dtype=jnp.float32),
+            ),
+            v_bus_angle=jnp.angle(state.v_bus_pu),
+            p_inj_bus=self.pu_to_kw(state.s_inj_bus_pu.real),
+            q_inj_bus=self.pu_to_kw(state.s_inj_bus_pu.imag),
         )
 
     def reset(self) -> GridState:

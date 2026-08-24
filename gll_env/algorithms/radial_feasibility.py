@@ -48,7 +48,7 @@ reflection step could overshoot straight through the feasible region and
 "converge" (zero further movement) the moment it happened to land
 anywhere inside, a different point every time the box shifted slightly.
 
-`RadialProjection.solve` short-circuits in two cases before computing
+`RadialFeasibility.solve` short-circuits in two cases before computing
 anything: if the origin is infeasible (malformed constraints; see
 above), or if the input `x` is already feasible, in which case it is
 returned unchanged. Both checks are evaluated as ordinary JAX values via
@@ -139,7 +139,7 @@ def _project_all_constraints(x: chex.Array, constraints: ActionConstraints) -> c
     `x` has shape (num_agents, action_dim). Constraints hold
     (num_agents, num_halfspaces / num_balls, action_dim) worth of
     per-agent sets. Used both as a cheap fallback and as the final
-    floating-point cleanup pass after `RadialProjection`'s closed-form scale.
+    floating-point cleanup pass after `RadialFeasibility`'s closed-form scale.
     """
 
     num_halfspaces = constraints.halfspace_a.shape[-2]
@@ -170,7 +170,7 @@ def _project_all_constraints(x: chex.Array, constraints: ActionConstraints) -> c
 
 
 @dataclass(frozen=True)
-class RadialProjection:
+class RadialFeasibility:
     tolerance: float = 1e-4
 
     def solve(

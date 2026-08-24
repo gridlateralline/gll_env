@@ -20,7 +20,7 @@ import chex
 import jax.numpy as jnp
 import jax.random as jr
 
-from gll_env.algorithms.radial_projection import RadialProjection
+from gll_env.algorithms.radial_feasibility import RadialFeasibility
 from gll_env.components.battery import (
     BatteryDynamics,
     BatteryObservation,
@@ -47,12 +47,44 @@ class InverterState:
 
 @chex.dataclass(frozen=True)
 class InverterObservation:
-    p_inv_realized: chex.Array  # (num_inv,) float32 in [-1, 1]
-    q_inv_realized: chex.Array  # (num_inv,) float32 in [-1, 1]
-    p_inv_min: chex.Array  # (num_inv,) float32 in [-1, 0]
-    p_inv_max: chex.Array  # (num_inv,) float32 in [0, 1]
+    """Observation of past inverter flow and upcoming active-power bounds.
+
+    Attributes:
+        p_inv_realized: Past-interval active inverter energy. Unnormalized
+            values are in kWh; normalized values are in ``[-1, 1]``.
+        q_inv_realized: Past-interval reactive inverter energy. Unnormalized
+            values are in kvarh; normalized values are in ``[-1, 1]``.
+        p_inv_min: Coming-interval minimum active inverter energy. Unnormalized
+            values are in kWh; normalized values are in ``[-1, 0]``.
+        p_inv_max: Coming-interval maximum active inverter energy. Unnormalized
+            values are in kWh; normalized values are in ``[0, 1]``.
+        battery_observation: Nested battery observation, normalized when this
+            observation is normalized.
+        solar_observation: Nested solar observation, normalized when this
+            observation is normalized.
+        is_normalized: Defaults to ``False``.
+    """
+
+    p_inv_realized: chex.Array  # (num_inv,) float32 -- past interval
+    q_inv_realized: chex.Array  # (num_inv,) float32 -- past interval
+    p_inv_min: chex.Array  # (num_inv,) float32 -- coming interval
+    p_inv_max: chex.Array  # (num_inv,) float32 -- coming interval
     battery_observation: BatteryObservation
     solar_observation: SolarObservation
+    is_normalized: bool = field(default=False)
+
+    def normalize(self, inverter_dynamics: "InverterDynamics") -> "InverterObservation":
+        return InverterObservation(
+            p_inv_realized=safe_normalize(self.p_inv_realized, inverter_dynamics.s_inv_max_kvah),
+            q_inv_realized=safe_normalize(self.q_inv_realized, inverter_dynamics.s_inv_max_kvah),
+            p_inv_min=safe_normalize(self.p_inv_min, inverter_dynamics.s_inv_max_kvah),
+            p_inv_max=safe_normalize(self.p_inv_max, inverter_dynamics.s_inv_max_kvah),
+            battery_observation=self.battery_observation.normalize(
+                inverter_dynamics.battery_dynamics
+            ),
+            solar_observation=self.solar_observation.normalize(inverter_dynamics.solar_dynamics),
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -62,7 +94,7 @@ class InverterDynamics:
     battery_dynamics: BatteryDynamics
     solar_dynamics: SolarDynamics
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)
-    projection: RadialProjection = field(default_factory=RadialProjection)
+    projection: RadialFeasibility = field(default_factory=RadialFeasibility)
 
     @cached_property
     def num_inv(self) -> int:
@@ -146,10 +178,10 @@ class InverterDynamics:
     def observation(self, state: InverterState) -> InverterObservation:
         p_inv_min_kwh, p_inv_max_kwh = self.request_bounds(state.s_inv_request_constraint)
         return InverterObservation(
-            p_inv_realized=safe_normalize(jnp.real(state.s_inv_realized_kvah), self.s_inv_max_kvah),
-            q_inv_realized=safe_normalize(jnp.imag(state.s_inv_realized_kvah), self.s_inv_max_kvah),
-            p_inv_min=safe_normalize(p_inv_min_kwh, self.s_inv_max_kvah),
-            p_inv_max=safe_normalize(p_inv_max_kwh, self.s_inv_max_kvah),
+            p_inv_realized=jnp.real(state.s_inv_realized_kvah),
+            q_inv_realized=jnp.imag(state.s_inv_realized_kvah),
+            p_inv_min=p_inv_min_kwh,
+            p_inv_max=p_inv_max_kwh,
             solar_observation=self.solar_dynamics.observation(state.solar_state),
             battery_observation=self.battery_dynamics.observation(state.battery_state),
         )

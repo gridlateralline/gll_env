@@ -20,37 +20,66 @@ from gll_env.components.day_time import DaytimeDynamics, DaytimeState
 
 
 def test_step_duration_and_progress() -> None:
-    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
-    state = DaytimeState(day_step=jnp.int32(1), day_progress=jnp.float32(0.375))
+    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
+    state = DaytimeState(
+        day_step=jnp.int32(1), interval_start=jnp.float32(1 / 12), interval_end=jnp.float32(2 / 12)
+    )
 
-    assert dynamics.step_duration_h == 6.0
-    assert jnp.allclose(dynamics.step(state).day_progress, 0.625)
+    assert dynamics.step_duration_h == 2.0
+    next_state = dynamics.step(state)
+    assert jnp.allclose(next_state.interval_start, 2 / 12)
+    assert jnp.allclose(next_state.interval_end, 3 / 12)
 
 
 def test_reset_returns_a_valid_random_step() -> None:
-    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
 
     state = dynamics.reset(jr.PRNGKey(0))
 
-    assert 0 <= int(state.day_step) < 4
-    assert jnp.allclose(state.day_progress, (state.day_step + 0.5) / 4)
+    assert 0 <= int(state.day_step) < 12
+    assert jnp.allclose(state.interval_start, state.day_step / 12)
+    assert jnp.allclose(state.interval_end, (state.day_step + 1) / 12)
 
 
 def test_step_wraps_to_the_start_of_the_day() -> None:
-    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
-    state = DaytimeState(day_step=jnp.int32(3), day_progress=jnp.float32(0.875))
+    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
+    state = DaytimeState(
+        day_step=jnp.int32(11), interval_start=jnp.float32(11 / 12), interval_end=jnp.float32(1.0)
+    )
 
     next_state = dynamics.step(state)
 
     assert int(next_state.day_step) == 0
-    assert jnp.allclose(next_state.day_progress, 0.125)
+    assert jnp.allclose(next_state.interval_start, 0.0)
+    assert jnp.allclose(next_state.interval_end, 1 / 12)
 
 
 def test_previous_wraps_to_the_end_of_the_day() -> None:
-    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
-    state = DaytimeState(day_step=jnp.int32(0), day_progress=jnp.float32(0.125))
+    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
+    state = DaytimeState(
+        day_step=jnp.int32(0), interval_start=jnp.float32(0.0), interval_end=jnp.float32(1 / 12)
+    )
 
     previous_state = dynamics.previous(state)
 
-    assert int(previous_state.day_step) == 3
-    assert jnp.allclose(previous_state.day_progress, 0.875)
+    assert int(previous_state.day_step) == 11
+    assert jnp.allclose(previous_state.interval_start, 11 / 12)
+    assert jnp.allclose(previous_state.interval_end, 1.0)
+
+
+def test_observation_uses_hours_since_midnight() -> None:
+    dynamics = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
+    state = DaytimeState(
+        day_step=jnp.int32(1), interval_start=jnp.float32(1 / 12), interval_end=jnp.float32(2 / 12)
+    )
+
+    observation = dynamics.observation(state)
+    normalized = observation.normalize(dynamics)
+
+    assert not observation.is_normalized
+    assert normalized.is_normalized
+    assert int(observation.day_step) == 1
+    assert jnp.allclose(observation.interval_start, 2.0)
+    assert jnp.allclose(observation.interval_end, 4.0)
+    assert jnp.allclose(normalized.interval_start, 1 / 12)
+    assert jnp.allclose(normalized.interval_end, 2 / 12)

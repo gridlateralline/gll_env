@@ -28,11 +28,11 @@ from gll_env.components.solar import SolarDynamics
 
 
 def build_environment() -> EnvironmentModel:
-    time = DaytimeDynamics(n_steps_per_day=jnp.int32(4))
+    time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     battery = BatteryDynamics(
         capacity_kwh=jnp.array([10.0], dtype=jnp.float32),
-        peak_charge_kw=jnp.array([1.0], dtype=jnp.float32),
-        peak_discharge_kw=jnp.array([2.0], dtype=jnp.float32),
+        charge_rating_kw=jnp.array([1.0], dtype=jnp.float32),
+        discharge_rating_kw=jnp.array([2.0], dtype=jnp.float32),
         time=time,
     )
     solar = SolarDynamics(peak_power_kw=jnp.array([2.0], dtype=jnp.float32), time=time)
@@ -73,7 +73,9 @@ def build_environment() -> EnvironmentModel:
 
 def test_normalized_constraints_are_equivalent_to_physical_constraints() -> None:
     environment = build_environment()
-    time_state = DaytimeState(day_progress=jnp.float32(0.5), day_step=jnp.int32(2))
+    time_state = DaytimeState(
+        interval_start=jnp.float32(0.5), interval_end=jnp.float32(0.75), day_step=jnp.int32(2)
+    )
     state = environment.reset(jr.PRNGKey(0), time_state=time_state)
 
     normalized_action = jnp.array([[0.25, -0.5]], dtype=jnp.float32)
@@ -95,7 +97,9 @@ def test_infeasible_normalized_requests_are_projected_and_state_remains_consiste
     environment = build_environment()
     state = environment.reset(
         jr.PRNGKey(1),
-        time_state=DaytimeState(day_progress=jnp.float32(0.5), day_step=jnp.int32(2)),
+        time_state=DaytimeState(
+            interval_start=jnp.float32(0.5), interval_end=jnp.float32(0.75), day_step=jnp.int32(2)
+        ),
     )
     old_key = state.key
     next_state = environment.step(state, jnp.array([[100.0, -100.0]], dtype=jnp.float32))
@@ -120,7 +124,11 @@ def test_clock_wraps_at_day_boundary() -> None:
     environment = build_environment()
     state = environment.reset(
         jr.PRNGKey(2),
-        time_state=DaytimeState(day_progress=jnp.float32(0.875), day_step=jnp.int32(3)),
+        time_state=DaytimeState(
+            interval_start=jnp.float32(11 / 12),
+            interval_end=jnp.float32(1.0),
+            day_step=jnp.int32(11),
+        ),
     )
 
     next_state = environment.step(state, jnp.zeros((1, 2), dtype=jnp.float32))
