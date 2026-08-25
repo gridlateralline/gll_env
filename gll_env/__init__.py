@@ -35,6 +35,18 @@ For configuration-driven construction, pass a :class:`ConfigGenerator`::
         time_limit=96,
     )
 
+The reward is injected the same way, so a scenario and a reward can be
+recombined freely::
+
+    env = gll_env.ProsumerGrid(
+        generator=generator,
+        reward_fn=gll_env.LegSettlementReward(payments, generator.env_dynamics.prosumer),
+        time_limit=96,
+    )
+
+or selected by name from config with :func:`gll_env.factories.reward_fn`. See
+:mod:`gll_env.rewards` for the available rewards.
+
 Importing this package registers ``ProsumerGrid-v0`` with Jumanji, so it can
 also be created with ``jumanji.make("ProsumerGrid-v0")`` after ``import gll_env``.
 """
@@ -44,7 +56,7 @@ import jumanji
 from gll_env.env import EnvironmentState, ProsumerGrid
 from gll_env.generator import ConfigGenerator, DynamicsGenerator
 from gll_env.observer import MarlObserver, RawObserver
-from gll_env.reward import BaseReward, RewardFn
+from gll_env.rewards import BaseReward, LegSettlementReward, Payments, RewardFn
 
 jumanji.register(
     id="ProsumerGrid-v0",
@@ -57,7 +69,9 @@ __all__ = [
     "ConfigGenerator",
     "DynamicsGenerator",
     "EnvironmentState",
+    "LegSettlementReward",
     "MarlObserver",
+    "Payments",
     "ProsumerGrid",
     "RawObserver",
     "RewardFn",
