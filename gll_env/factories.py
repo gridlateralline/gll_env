@@ -86,8 +86,11 @@ from gll_env.components.inverter import InverterDynamics
 from gll_env.components.load import LoadDynamics
 from gll_env.components.prosumer import ProsumerDynamics
 from gll_env.components.solar import SolarDynamics
+from gll_env.rewards.base import BaseReward, RewardFn
+from gll_env.rewards.leg import LegSettlementReward, Payments
 
 GRID_ASSETS_DIR = Path(__file__).with_name("assets").joinpath("components_grid")
+LEG_ASSETS_DIR = Path(__file__).with_name("assets").joinpath("rewards_leg")
 
 
 def _broadcast(value: Any, shape: tuple[int, ...]) -> jnp.ndarray:
@@ -241,6 +244,64 @@ def prosumer_dynamics(
         time=time,
         **kwargs,
     )
+
+
+def payments(config: DictConfig) -> Payments:
+    """Load LEG tariff rates from a safetensors asset.
+
+    Config: ``payments`` (asset name, e.g. ``solarquartier``, ``fair_leg``,
+    ``flat_leg`` -- see ``assets.rewards_leg.generator``).
+    """
+    return Payments(**load_asset_arrays(config.payments, asset_dir=LEG_ASSETS_DIR))
+
+
+def leg_settlement_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+    """Build a :class:`LegSettlementReward`.
+
+    Config: ``payments`` (asset name) -- see :func:`payments`.
+    """
+    return LegSettlementReward(payments=payments(config), prosumer=env_model.prosumer)
+
+
+def base_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+    """Build the placeholder :class:`BaseReward`, which takes no parameters."""
+    del config, env_model
+    return BaseReward()
+
+
+# Reward name -> builder. Add an entry here to make a new reward selectable
+# from config; the builder signature is uniform so callers never special-case.
+REWARD_BUILDERS = {
+    "base": base_reward,
+    "leg_settlement": leg_settlement_reward,
+}
+
+
+def reward_fn(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+    """Build the reward named by config, against an already-built environment model.
+
+    :class:`~gll_env.env.ProsumerGrid` takes the reward as a constructor
+    argument rather than reading it off the generator, so a scenario and a
+    reward can be recombined freely::
+
+        generator = ConfigGenerator(n_steps_per_day=96, grid=grid_cfg, prosumer=prosumer_cfg)
+        env = ProsumerGrid(
+            generator=generator,
+            reward_fn=reward_fn(reward_cfg, generator.env_dynamics),
+            time_limit=96,
+        )
+
+    Config: ``name`` (a key of :data:`REWARD_BUILDERS`), plus whatever that
+    reward needs -- ``leg_settlement`` additionally takes ``payments``::
+
+        reward:
+            name: leg_settlement
+            payments: solarquartier
+    """
+    name = str(config.get("name", "base"))
+    if name not in REWARD_BUILDERS:
+        raise ValueError(f"Unknown reward {name!r}; expected one of {sorted(REWARD_BUILDERS)}.")
+    return REWARD_BUILDERS[name](config, env_model)
 
 
 def environment_model(config: DictConfig) -> EnvironmentDynamics:

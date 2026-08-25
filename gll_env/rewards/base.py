@@ -13,14 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Reward functions for the ProsumerGrid environment.
+"""Reward function ABC and the default placeholder reward.
 
 Follows the Jumanji pattern (see ``connector/reward.py``):
 an injectable :class:`RewardFn` ABC so the reward signal can be swapped
 without subclassing :class:`ProsumerGrid`.
 
 The default :class:`BaseReward` is a placeholder — reward shaping is a
-research concern separate from environment dynamics.
+research concern separate from environment dynamics. Concrete rewards live
+in sibling modules of this package (see :mod:`gll_env.rewards.leg`) and are
+selected from config via :func:`gll_env.factories.reward_fn`.
 """
 
 import abc

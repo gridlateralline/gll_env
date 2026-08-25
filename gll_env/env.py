@@ -30,7 +30,7 @@ from gll_env.observer import (
     MarlObserver,
     Observer,
 )
-from gll_env.reward import BaseReward, RewardFn
+from gll_env.rewards import BaseReward, RewardFn
 
 
 class ProsumerGrid(
