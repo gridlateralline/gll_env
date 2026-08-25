@@ -45,22 +45,19 @@ class SolarObservation:
     Attributes:
         sol_realized: Past-interval solar generation. Unnormalized values are
             in ``[0, s_sol_max_kwh]``; normalized values are in ``[0, 1]``.
-        sol_available: Coming-interval available solar generation with the
+        sol_request_max: Coming-interval maximum solar generation with the
             same range as ``sol_realized``.
-        sol_clearness: Coming-interval clearness index in ``[0, 1]``.
         is_normalized: Defaults to ``False``.
     """
 
     sol_realized: chex.Array  # (num_sol,) float32 -- past interval
-    sol_available: chex.Array  # (num_sol,) float32 -- coming interval
-    sol_clearness: chex.Array  # (num_sol,) float32 -- coming interval
+    sol_request_max: chex.Array  # (num_sol,) float32 -- coming interval
     is_normalized: bool = field(default=False)
 
     def normalize(self, solar_dynamics: "SolarDynamics") -> "SolarObservation":
         return SolarObservation(
             sol_realized=safe_normalize(self.sol_realized, solar_dynamics.s_sol_max_kwh),
-            sol_available=safe_normalize(self.sol_available, solar_dynamics.s_sol_max_kwh),
-            sol_clearness=self.sol_clearness,
+            sol_request_max=safe_normalize(self.sol_request_max, solar_dynamics.s_sol_max_kwh),
             is_normalized=True,
         )
 
@@ -191,10 +188,9 @@ class SolarDynamics:
     def observation(self, state: SolarState) -> SolarObservation:
         return SolarObservation(
             sol_realized=state.sol_realized_kwh,
-            sol_available=self._available_energy(
+            sol_request_max=self._available_energy(
                 state.time_state.interval_midpoint, state.clearness
             ),
-            sol_clearness=state.clearness,
         )
 
     def reset(self, key: chex.PRNGKey, time_state: DaytimeState | None = None) -> SolarState:

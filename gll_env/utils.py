@@ -13,12 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import fields as dataclass_fields
-from dataclasses import is_dataclass
-from typing import Any, Dict
+from typing import Any
 
 import jax.numpy as jnp
-from jumanji import specs
 
 
 def safe_normalize(value: Any, scale: Any) -> jnp.ndarray:
@@ -26,32 +23,3 @@ def safe_normalize(value: Any, scale: Any) -> jnp.ndarray:
     value_array = jnp.asarray(value)
     scale_array = jnp.asarray(scale)
     return jnp.where(scale_array > 0.0, value_array / scale_array, jnp.zeros_like(value_array))
-
-
-def _is_namedtuple_instance(value: Any) -> bool:
-    return isinstance(value, tuple) and hasattr(value, "_fields")
-
-
-def _array_spec(value: Any, name: str) -> specs.Array:
-    array_value = jnp.asarray(value)
-    return specs.Array(array_value.shape, array_value.dtype, name)
-
-
-def spec_from_example(example: Any, name: str | None = None) -> specs.Spec:
-    if is_dataclass(example):
-        fields_spec: Dict[str, specs.Spec] = {}
-        for field in dataclass_fields(example):
-            fields_spec[field.name] = spec_from_example(
-                getattr(example, field.name),
-                name=field.name,
-            )
-        return specs.Spec(type(example), name or type(example).__name__, **fields_spec)
-
-    if _is_namedtuple_instance(example):
-        fields_spec = {
-            field_name: spec_from_example(getattr(example, field_name), name=field_name)
-            for field_name in example._fields
-        }
-        return specs.Spec(type(example), name or type(example).__name__, **fields_spec)
-
-    return _array_spec(example, name or "value")

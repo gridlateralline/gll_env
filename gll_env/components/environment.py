@@ -57,9 +57,9 @@ from gll_env.utils import safe_normalize
 
 @chex.dataclass(frozen=True)
 class EnvironmentState(StateProtocol):
-    prosumer_state: ProsumerState
-    grid_state: GridState
     time_state: DaytimeState
+    grid_state: GridState
+    prosumer_state: ProsumerState
 
     action_constraints: ActionConstraints  # normalized [-1, 1]^2, for the COMING interval
 
@@ -84,17 +84,17 @@ class EnvironmentObservation:
         is_normalized: Defaults to ``False``.
     """
 
-    prosumer_observation: ProsumerObservation
-    grid_observation: GridObservation
     time_observation: DaytimeObservation
+    grid_observation: GridObservation
+    prosumer_observation: ProsumerObservation
     step_count: chex.Numeric  # () int32
     is_normalized: bool = field(default=False)
 
     def normalize(self, environment_model: "EnvironmentModel") -> "EnvironmentObservation":
         return EnvironmentObservation(
-            prosumer_observation=self.prosumer_observation.normalize(environment_model.prosumer),
-            grid_observation=self.grid_observation.normalize(environment_model.grid),
             time_observation=self.time_observation.normalize(environment_model.time),
+            grid_observation=self.grid_observation.normalize(environment_model.grid),
+            prosumer_observation=self.prosumer_observation.normalize(environment_model.prosumer),
             step_count=self.step_count,
             is_normalized=True,
         )
@@ -196,9 +196,9 @@ class EnvironmentModel:
         step_count = jnp.asarray(0, dtype=jnp.int32)
         valid = jnp.logical_and(grid_state.valid, prosumer_state.valid)
         return EnvironmentState(
-            prosumer_state=prosumer_state,
-            grid_state=grid_state,
             time_state=time_state,
+            grid_state=grid_state,
+            prosumer_state=prosumer_state,
             action_constraints=action_constraints,
             step_count=step_count,
             valid=valid,
@@ -247,9 +247,9 @@ class EnvironmentModel:
         )
         next_key = jr.fold_in(state.key, state.step_count + 1)
         return EnvironmentState(
-            prosumer_state=next_prosumer_state,
-            grid_state=next_grid_state,
             time_state=next_time_state,
+            grid_state=next_grid_state,
+            prosumer_state=next_prosumer_state,
             action_constraints=next_action_constraints,
             step_count=next_step_count,
             valid=next_valid,

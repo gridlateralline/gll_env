@@ -73,31 +73,11 @@ class ActionConstraints:
 
 
 @dataclass(frozen=True)
-class ObservationMarl:
-    """The observation that the agent sees.
-
-    agents_view: the agent's view of the environment.
-    action_mask: boolean array specifying, for each agent, which action is legal.
-    action_constraints: optional action constraints for each agent.
-    step_count: the number of steps elapsed since the beginning of the episode.
-    """
-
-    agents_view: chex.Array  # (num_agents, num_obs_features)
-    action_mask: chex.Array  # (num_agents, num_actions)
-    action_constraints: Optional[ActionConstraints] = None
-    step_count: Optional[chex.Array] = None  # (num_agents, )
-
-
-@dataclass(frozen=True)
-class ObservationMarlGlobalState:
-    """The observation seen by agents in centralised systems.
-
-    Extends `ObservationMarl` by adding a `global_state` attribute for centralised training.
-    global_state: The global state of the environment, often a concatenation of agents' views.
-    """
+class MarlObservation:
+    """The observation seen by agents in centralised systems."""
 
     agents_view: chex.Array  # (num_agents, num_obs_features)
     action_mask: chex.Array  # (num_agents, num_actions)
     global_state: chex.Array  # (num_agents, num_state_features)
-    action_constraints: Optional[ActionConstraints] = None
+    action_constraints: Optional[ActionConstraints] = None  # (num_agents, ...)
     step_count: Optional[chex.Array] = None  # (num_agents, )

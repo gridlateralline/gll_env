@@ -37,9 +37,9 @@ class ProsumerState:
     s_pq_realized_kvah: chex.Array  # (num_pq,) complex64 -- past interval, realized
     s_inv_request_constraint: ActionConstraints
 
-    inverter_state: InverterState
-    load_state: LoadState
     time_state: DaytimeState
+    load_state: LoadState
+    inverter_state: InverterState
 
     valid: chex.Array  # (,) bool
 
@@ -49,31 +49,31 @@ class ProsumerObservation:
     """Observation of past net grid flow and nested component observations.
 
     Attributes:
-        p_pq_realized: Past-interval active net grid energy. Unnormalized
-            values are in kWh; normalized values are in ``[-1, 1]``.
-        q_pq_realized: Past-interval reactive net grid energy. Unnormalized
-            values are in kvarh; normalized values are in ``[-1, 1]``.
-        inverter_observation: Nested inverter observation, normalized when this
-            observation is normalized.
+        p_pq_realized: Past-interval active net grid energy injection.
+            Unnormalized values are in kWh; normalized values are in ``[-1, 1]``.
+        q_pq_realized: Past-interval reactive net grid energy injection.
+            Unnormalized values are in kvarh; normalized values are in ``[-1, 1]``.
         load_observation: Nested load observation, normalized when this
+            observation is normalized.
+        inverter_observation: Nested inverter observation, normalized when this
             observation is normalized.
         is_normalized: Defaults to ``False``.
     """
 
     p_pq_realized: chex.Array  # (num_pq,) float32 -- past interval
     q_pq_realized: chex.Array  # (num_pq,) float32 -- past interval
-    inverter_observation: InverterObservation
     load_observation: LoadObservation
+    inverter_observation: InverterObservation
     is_normalized: bool = field(default=False)
 
     def normalize(self, prosumer_dynamics: "ProsumerDynamics") -> "ProsumerObservation":
         return ProsumerObservation(
             p_pq_realized=safe_normalize(self.p_pq_realized, prosumer_dynamics.s_pq_max_kvah),
             q_pq_realized=safe_normalize(self.q_pq_realized, prosumer_dynamics.s_pq_max_kvah),
+            load_observation=self.load_observation.normalize(prosumer_dynamics.load_dynamics),
             inverter_observation=self.inverter_observation.normalize(
                 prosumer_dynamics.inverter_dynamics
             ),
-            load_observation=self.load_observation.normalize(prosumer_dynamics.load_dynamics),
             is_normalized=True,
         )
 
@@ -219,8 +219,8 @@ class ProsumerDynamics:
 
     def observation(self, state: ProsumerState) -> ProsumerObservation:
         return ProsumerObservation(
-            p_pq_realized=state.s_pq_realized_kvah.real,
-            q_pq_realized=state.s_pq_realized_kvah.imag,
+            p_pq_realized=state.s_pq_realized_kvah.real * self.time.step_duration_h,
+            q_pq_realized=state.s_pq_realized_kvah.imag * self.time.step_duration_h,
             inverter_observation=self.inverter_dynamics.observation(state.inverter_state),
             load_observation=self.load_dynamics.observation(state.load_state),
         )
@@ -248,9 +248,9 @@ class ProsumerDynamics:
         fictional_prev_state = ProsumerState(
             s_pq_realized_kvah=jnp.zeros((self.num_pq,), dtype=jnp.complex64),  # unused by step()
             s_inv_request_constraint=request_constraint_prev,
-            inverter_state=inverter_state_prev,
-            load_state=load_state_prev,
             time_state=time_state_prev,
+            load_state=load_state_prev,
+            inverter_state=inverter_state_prev,
             valid=jnp.bool_(True),  # no prior interval to inherit invalidity from
         )
 
@@ -336,8 +336,8 @@ class ProsumerDynamics:
         return ProsumerState(
             s_pq_realized_kvah=next_s_pq_realized_kvah,
             s_inv_request_constraint=next_request_constraint,
-            inverter_state=next_inverter_state,
-            load_state=next_load_state,
             time_state=next_time_state,
+            load_state=next_load_state,
+            inverter_state=next_inverter_state,
             valid=next_valid,
         )

@@ -107,9 +107,9 @@ class TestGridReset:
             model.admittance @ jnp.ones((model.num_bus,), dtype=jnp.complex64)
         )
 
-        assert state.v_bus_pu.shape == (model.num_bus,)
-        assert jnp.allclose(state.v_bus_pu, jnp.ones((model.num_bus,), dtype=jnp.complex64))
-        assert jnp.allclose(state.s_inj_bus_pu, expected_s_inj)
+        assert state.bus_voltage_pu.shape == (model.num_bus,)
+        assert jnp.allclose(state.bus_voltage_pu, jnp.ones((model.num_bus,), dtype=jnp.complex64))
+        assert jnp.allclose(state.bus_power_injection_pu, expected_s_inj)
         assert int(state.nr_steps) == 0
         assert bool(state.valid)
 
@@ -139,15 +139,15 @@ class TestGridStep:
         assert len(fake_nr.calls) == 1
         call = fake_nr.calls[0]
         s_inj_bus_in = jnp.asarray(call["s_inj_bus_in"])  # narrow chex.Array for indexing
-        s_inj_bus_pu = jnp.asarray(state.s_inj_bus_pu)  # narrow chex.Array for indexing
-        assert jnp.allclose(call["v_bus_in"], state.v_bus_pu)
+        s_inj_bus_pu = jnp.asarray(state.bus_power_injection_pu)  # narrow chex.Array for indexing
+        assert jnp.allclose(call["v_bus_in"], state.bus_voltage_pu)
         assert jnp.allclose(s_inj_bus_in[model.slack_id], s_inj_bus_pu[model.slack_id])
         assert jnp.allclose(s_inj_bus_in[model.pq_id], expected_s_pq_pu)
         assert jnp.allclose(call["pq_id"], model.pq_id)
         assert jnp.allclose(call["pv_id"], model.pv_id)
         assert jnp.allclose(call["admittance"], model.admittance)
 
-        assert jnp.allclose(next_state.v_bus_pu, fake_nr.v_bus_out)
-        assert jnp.allclose(next_state.s_inj_bus_pu, fake_nr.s_inj_bus_out)
+        assert jnp.allclose(next_state.bus_voltage_pu, fake_nr.v_bus_out)
+        assert jnp.allclose(next_state.bus_power_injection_pu, fake_nr.s_inj_bus_out)
         assert int(next_state.nr_steps) == 7
         assert not bool(next_state.valid)

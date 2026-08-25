@@ -50,8 +50,6 @@ class LoadObservation:
             raw and normalized ranges as ``p_load_realized``.
         q_load_forecast: Coming-interval reactive load energy, with the same
             raw and normalized ranges as ``q_load_realized``.
-        load_factor: Dimensionless load factor, always represented in
-            ``[0, 1]``.
         is_normalized: Whether the physical energy fields are normalized.
             Defaults to ``False``.
     """
@@ -60,7 +58,6 @@ class LoadObservation:
     q_load_realized: chex.Array  # (num_load,) float32 -- past interval
     p_load_forecast: chex.Array  # (num_load,) float32 -- coming interval
     q_load_forecast: chex.Array  # (num_load,) float32 -- coming interval
-    load_factor: chex.Array  # (num_load,) float32 -- coming interval
     is_normalized: bool = field(default=False)
 
     def normalize(self, load_dynamics: "LoadDynamics") -> "LoadObservation":
@@ -70,7 +67,6 @@ class LoadObservation:
             q_load_realized=safe_normalize(self.q_load_realized, s_load_max_kvah),
             p_load_forecast=safe_normalize(self.p_load_forecast, s_load_max_kvah),
             q_load_forecast=safe_normalize(self.q_load_forecast, s_load_max_kvah),
-            load_factor=self.load_factor,
             is_normalized=True,
         )
 
@@ -332,7 +328,6 @@ class LoadDynamics:
             q_load_realized=state.s_load_realized_kvah.imag,
             p_load_forecast=state.s_load_kvah.real,
             q_load_forecast=state.s_load_kvah.imag,
-            load_factor=safe_normalize(state.load_factor, self._load_factor_max),
         )
 
     def _new_load_factor(self, load_factor: chex.Array, key: chex.PRNGKey) -> chex.Array:

@@ -82,8 +82,8 @@ def test_reset_returns_finite_bounded_state() -> None:
     assert jnp.all(state.sol_realized_kwh <= solar.s_sol_max_kwh)
     assert jnp.all(observation.sol_realized >= 0.0)
     assert jnp.all(observation.sol_realized <= 1.0)
-    assert jnp.all(observation.sol_available >= 0.0)
-    assert jnp.all(observation.sol_available <= 1.0)
+    assert jnp.all(observation.sol_request_max >= 0.0)
+    assert jnp.all(observation.sol_request_max <= 1.0)
 
 
 def test_zero_peak_and_negative_configuration_values_are_safe() -> None:

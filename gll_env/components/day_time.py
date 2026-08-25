@@ -47,12 +47,18 @@ class DaytimeObservation:
         interval_end: End time of the coming interval since midnight,
             represented as 24h at the end of the day. Unnormalized values are
             in ``(0, 24h]``; normalized values are in ``(0, 1]``.
+        time_sin: Sine of the coming interval's midpoint; Values in [-1, 1].
+            midnight is 0, noon is 0, 6am is 1, 6pm is -1.
+        time_cos: Cosine of the coming interval's midpoint in [-1, 1].
+            midnight is 1, noon is -1, 6am is 0, 6pm is 0.
         is_normalized: Defaults to ``False``.
     """
 
     day_step: chex.Numeric  # () int32
     interval_start: chex.Numeric  # () float32 -- coming interval
     interval_end: chex.Numeric  # () float32 -- coming interval
+    time_sin: chex.Numeric  # () float32 -- coming interval
+    time_cos: chex.Numeric  # () float32 -- coming interval
     is_normalized: bool = field(default=False)
 
     def normalize(self, daytime_dynamics: "DaytimeDynamics") -> "DaytimeObservation":
@@ -60,6 +66,8 @@ class DaytimeObservation:
             day_step=self.day_step,
             interval_start=self.interval_start / 24.0,
             interval_end=self.interval_end / 24.0,
+            time_sin=self.time_sin,
+            time_cos=self.time_cos,
             is_normalized=True,
         )
 
@@ -89,6 +97,8 @@ class DaytimeDynamics:
             day_step=state.day_step,
             interval_start=state.interval_start * 24.0,
             interval_end=state.interval_end * 24.0,
+            time_sin=jnp.sin(2 * jnp.pi * state.interval_midpoint),
+            time_cos=jnp.cos(2 * jnp.pi * state.interval_midpoint),
         )
 
     def reset(self, key: chex.PRNGKey) -> DaytimeState:
