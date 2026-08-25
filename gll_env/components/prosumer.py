@@ -219,8 +219,8 @@ class ProsumerDynamics:
 
     def observation(self, state: ProsumerState) -> ProsumerObservation:
         return ProsumerObservation(
-            p_pq_realized=state.s_pq_realized_kvah.real * self.time.step_duration_h,
-            q_pq_realized=state.s_pq_realized_kvah.imag * self.time.step_duration_h,
+            p_pq_realized=state.s_pq_realized_kvah.real,
+            q_pq_realized=state.s_pq_realized_kvah.imag,
             inverter_observation=self.inverter_dynamics.observation(state.inverter_state),
             load_observation=self.load_dynamics.observation(state.load_state),
         )

@@ -131,3 +131,54 @@ def test_negative_physical_ratings_are_clamped_to_zero() -> None:
     assert jnp.allclose(battery.capacity_kwh, 0.0)
     assert jnp.allclose(battery.charge_rating_kw, 0.0)
     assert jnp.allclose(battery.discharge_rating_kw, 0.0)
+
+
+def test_state_of_charge_bookkeeping_is_conservative() -> None:
+    """Energy bookkeeping across a step, from first principles.
+
+    Three things must hold simultaneously, for any request including wildly
+    out-of-range ones:
+
+    * ``full + free == capacity`` -- free is defined as headroom, so the two
+      partition a fixed capacity and cannot drift apart.
+    * ``next_full - full == -realized`` -- the sign convention is positive =
+      discharge, so stored energy falls by exactly what flowed out. This is
+      what ties the kWh flow to the kWh stock; a rate/energy confusion in
+      either one breaks it.
+    * ``0 <= full <= capacity`` -- the battery never charges past full or
+      discharges past empty, which is enforced by the request bounds rather
+      than by a clamp on the stock itself.
+    """
+    battery = build_battery()
+    state = battery.reset(jr.PRNGKey(4))
+
+    for request in (0.5, -0.5, 2.0, -2.0, 0.0, 100.0, -100.0):
+        previous_full_kwh = state.bat_full_kwh
+        state = battery.step(state, jnp.full((battery.num_bat,), request, dtype=jnp.float32))
+
+        assert jnp.allclose(state.bat_full_kwh + state.bat_free_kwh, battery.capacity_kwh)
+        assert jnp.allclose(state.bat_full_kwh - previous_full_kwh, -state.bat_realized_kwh)
+        assert jnp.all(state.bat_full_kwh >= -1e-5)
+        assert jnp.all(state.bat_full_kwh <= battery.capacity_kwh + 1e-5)
+
+
+def test_reset_samples_a_realized_flow_its_own_history_could_have_produced() -> None:
+    """reset() fabricates a PAST-interval flow, so it is bounded by the state
+    that flow led INTO, not the one it leads out of.
+
+    A realized flow ``r`` (positive = discharge) implies the previous stock
+    was ``full + r``, which must itself have been within ``[0, capacity]`` --
+    giving ``r in [-full, free]``, the mirror image of the forward-looking
+    request bounds. Getting this backwards would seed episodes with histories
+    that no reachable state could have produced.
+    """
+    battery = build_battery()
+
+    for seed in range(16):
+        state = battery.reset(jr.PRNGKey(seed))
+        implied_previous_full_kwh = state.bat_full_kwh + state.bat_realized_kwh
+
+        assert jnp.all(implied_previous_full_kwh >= -1e-5)
+        assert jnp.all(implied_previous_full_kwh <= battery.capacity_kwh + 1e-5)
+        assert jnp.all(state.bat_realized_kwh >= -battery.peak_charge_per_step_kwh - 1e-5)
+        assert jnp.all(state.bat_realized_kwh <= battery.peak_discharge_per_step_kwh + 1e-5)

@@ -15,6 +15,7 @@
 
 import jax.numpy as jnp
 import jax.random as jr
+import pytest
 
 from gll_env.components.day_time import DaytimeDynamics, DaytimeState
 from gll_env.components.load import LoadDynamics, LoadState
@@ -101,11 +102,13 @@ def test_zero_load_has_finite_zero_observation() -> None:
     assert jnp.all(jnp.isfinite(state.s_load_kvah))
     assert jnp.all(jnp.isfinite(observation.p_load_forecast))
     assert jnp.all(jnp.isfinite(observation.q_load_forecast))
-    assert jnp.all(jnp.isfinite(observation.load_factor))
+    assert jnp.all(jnp.isfinite(state.load_factor))
     assert jnp.allclose(state.s_load_kvah, 0.0)
     assert jnp.allclose(observation.p_load_forecast, 0.0)
     assert jnp.allclose(observation.q_load_forecast, 0.0)
-    assert jnp.allclose(observation.load_factor, 0.0)
+    # A zero-rated load has _load_factor_max == 0, so the OU process is
+    # pinned rather than merely producing zero energy against a live factor.
+    assert jnp.allclose(state.load_factor, 0.0)
 
 
 def test_negative_configuration_values_are_clamped() -> None:
@@ -122,3 +125,65 @@ def test_negative_configuration_values_are_clamped() -> None:
     assert load.load_factor_reversion > 0.0
     assert jnp.allclose(load.load_factor_std, 0.0)
     assert load.power_factor > 0.0
+
+
+@pytest.mark.parametrize("n_steps_per_day", [12, 24, 48, 96, 192])
+def test_daily_energy_matches_the_configured_consumption(n_steps_per_day: int) -> None:
+    """Summing the per-interval active energy over one whole day at
+    ``load_factor == 1`` returns ``daily_consumption_kwh``, whatever
+    resolution the simulation runs at.
+
+    This is the end-to-end units check for the H0 path, and the one that
+    actually exercises the profile rescale: the table is read at its own
+    fixed 96-slot resolution and rescaled to the simulation's step duration,
+    so the two factors must cancel over a full day. Drop the rescale and the
+    total is off by ``step_duration_h / 0.25``; apply it twice and it is off
+    by the square.
+
+    Away from 96 steps/day the profile is midpoint-sampled rather than
+    integrated, so the sum carries a small discretization error -- bounded at
+    1% here, which is far tighter than any factor a units slip would
+    introduce (the smallest one in play is 2x).
+    """
+    load = LoadDynamics(
+        daily_consumption_kwh=jnp.array([96.0], dtype=jnp.float32),
+        s_load_max_kva=jnp.array([20.0], dtype=jnp.float32),
+        time=DaytimeDynamics(n_steps_per_day=jnp.int32(n_steps_per_day)),
+    )
+    unit_load_factor = jnp.array([1.0], dtype=jnp.float32)
+
+    midpoints = (jnp.arange(n_steps_per_day, dtype=jnp.float32) + 0.5) / n_steps_per_day
+    daily_kwh = sum(
+        float(load._new_s_load_kvah(midpoint, unit_load_factor).real[0]) for midpoint in midpoints
+    )
+
+    assert daily_kwh == pytest.approx(96.0, rel=0.01)
+
+
+def test_apparent_energy_respects_the_nameplate_rating_under_the_ou_process() -> None:
+    """``|S| <= s_load_max_kvah`` at every step, for every time of day.
+
+    LoadDynamics claims this as an enforced bound (not a typical value) via
+    the ``_load_factor_max`` clip, and both ProsumerDynamics' grid-ball
+    origin-feasibility argument and LoadObservation's advertised ``[0, 1]``
+    normalized range rest on it. The clip is anchored at the profile's peak
+    slot, so this walks a full day at a deliberately noisy load factor to
+    confirm the single threshold really does cover every other slot too.
+    """
+    load = LoadDynamics(
+        daily_consumption_kwh=jnp.array([96.0, 40.0], dtype=jnp.float32),
+        s_load_max_kva=jnp.array([20.0, 5.0], dtype=jnp.float32),
+        load_factor_reversion=jnp.float32(0.05),
+        load_factor_std=jnp.float32(0.5),  # deliberately wild, to drive into the clip
+        time=DaytimeDynamics(n_steps_per_day=jnp.int32(96)),
+    )
+    state = load.reset(jr.PRNGKey(7))
+
+    for _ in range(96):
+        state = load.step(state)
+        assert jnp.all(jnp.abs(state.s_load_kvah) <= load.s_load_max_kvah + 1e-4)
+        assert jnp.all(state.s_load_kvah.real >= 0.0)  # a load consumes, never injects
+
+    normalized = load.observation(state).normalize(load)
+    assert jnp.all(normalized.p_load_forecast >= 0.0)
+    assert jnp.all(normalized.p_load_forecast <= 1.0)

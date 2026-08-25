@@ -142,3 +142,60 @@ def test_negative_rating_is_clamped_to_zero() -> None:
     )
 
     assert jnp.allclose(inverter.s_inv_max_kva, 0.0)
+
+
+def test_dispatch_conserves_energy_across_the_internal_split() -> None:
+    """First law at the inverter node: whatever the inverter puts out over
+    the interval came from exactly two places, so
+    ``p_inv_realized == sol_realized + bat_realized`` must hold EXACTLY --
+    not to a tolerance.
+
+    step()'s derivation relies on both clips in the solar/battery split being
+    provable no-ops for a feasible ``p_inv_kwh``, which is what lets it keep
+    ``s_inv_realized_kvah`` from the projected request instead of
+    recomputing it from the leaves. If that reasoning ever breaks, the two
+    diverge silently: ``s_inv_realized_kvah`` would keep reporting a flow the
+    leaves never actually supplied. Driven with far-out-of-range requests in
+    both directions so the bounds are genuinely active.
+
+    Exact in exact arithmetic, but asserted to a float32-epsilon-scaled
+    tolerance rather than bit-equality: the split computes
+    ``sol = clip(p_inv - bat_min, ...)`` and then ``bat = p_inv - sol``, and
+    those two subtractions round independently, so the residual lands at
+    about 1 ULP of the operands. A genuine dispatch error -- a clip that is
+    no longer a no-op, or a rate/energy mixup in one leaf -- is O(kWh), many
+    orders of magnitude above that, so the tolerance costs no sensitivity.
+    """
+    inverter = build_inverter()
+    state = inverter.reset(jr.PRNGKey(4))
+    key = jr.PRNGKey(5)
+
+    for _ in range(20):
+        key, subkey = jr.split(key)
+        request = jr.normal(subkey, shape=(inverter.num_inv, 2)) * 20.0
+        state = inverter.step(state, request)
+
+        leaves_kwh = state.solar_state.sol_realized_kwh + state.battery_state.bat_realized_kwh
+        p_inv_kwh = state.s_inv_realized_kvah.real
+        tolerance = 8.0 * jnp.finfo(jnp.float32).eps * jnp.maximum(jnp.abs(p_inv_kwh), 1.0)
+        assert jnp.all(jnp.abs(p_inv_kwh - leaves_kwh) <= tolerance), (
+            "p_inv_realized must equal sol_realized + bat_realized; "
+            f"got {p_inv_kwh} vs {leaves_kwh}"
+        )
+        # Solar is generation-only and never exceeds what was available.
+        assert jnp.all(state.solar_state.sol_realized_kwh >= 0.0)
+
+
+def test_apparent_energy_never_exceeds_the_inverter_nameplate() -> None:
+    """|S| <= s_inv_max_kvah, i.e. the nameplate apparent-power rating
+    converted to this interval's energy budget -- the ball constraint, read
+    back off the realized flow rather than off the constraint object.
+    """
+    inverter = build_inverter()
+    state = inverter.reset(jr.PRNGKey(6))
+    key = jr.PRNGKey(7)
+
+    for _ in range(20):
+        key, subkey = jr.split(key)
+        state = inverter.step(state, jr.normal(subkey, shape=(inverter.num_inv, 2)) * 20.0)
+        assert jnp.all(jnp.abs(state.s_inv_realized_kvah) <= inverter.s_inv_max_kvah + 1e-3)

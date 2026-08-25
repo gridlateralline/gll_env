@@ -57,7 +57,7 @@ class GridObservation:
     Attributes:
         bus_voltage_deviation: Past-interval voltage deviation from the nominal bus voltage.
             Unnormalized values are in kV; normalized values are the per unit
-            deviation divided by ``v_bus_deviation_ref``.
+            deviation divided by ``voltage_deviation_ref_pu``.
         bus_voltage_angle: Past-interval bus voltage angle. Unnormalized values are in radians;
             normalized values are in ``[-1, 1]`` after division by pi.
         bus_active_power_injection: Past-interval real bus power injection.
@@ -221,7 +221,7 @@ class GridDynamics:
         chex.assert_type(self.admittance, jnp.complex64)
         chex.assert_type(self.position, jnp.float32)
         chex.assert_type(self.voltage_deviation_ref_pu, jnp.float32)
-        # base_s_mva/base_v_kv/v_bus_deviation_ref are divisors throughout the
+        # base_s_mva/base_v_kv/voltage_deviation_ref_pu are divisors throughout the
         # pu<->physical conversions and the observation normalization below;
         # unlike a component rating, a non-positive base isn't a meaningful
         # "disabled" state, just invalid data, so clamp to a tiny positive
@@ -231,13 +231,13 @@ class GridDynamics:
         object.__setattr__(self, "base_s_mva", jnp.maximum(self.base_s_mva, tiny))
         object.__setattr__(self, "base_v_kv", jnp.maximum(self.base_v_kv, tiny))
         object.__setattr__(
-            self, "v_bus_deviation_ref", jnp.maximum(self.voltage_deviation_ref_pu, tiny)
+            self, "voltage_deviation_ref_pu", jnp.maximum(self.voltage_deviation_ref_pu, tiny)
         )
 
     def to_asset_dict(self) -> dict:
         """Return a dict of arrays suitable for passing to :func:`save_arrays`.
 
-        Deliberately excludes `time`/`v_bus_deviation_ref`: those are runtime
+        Deliberately excludes `time`/`voltage_deviation_ref_pu`: those are runtime
         simulation/observation settings, not network-topology parameters, so
         they don't belong in the electrical-network asset file.
         """

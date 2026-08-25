@@ -137,3 +137,78 @@ def test_clock_wraps_at_day_boundary() -> None:
     assert int(next_state.prosumer_state.time_state.day_step) == 0
     assert int(next_state.prosumer_state.inverter_state.time_state.day_step) == 0
     assert int(next_state.prosumer_state.load_state.time_state.day_step) == 0
+
+
+def test_every_physical_invariant_survives_a_full_day_of_out_of_range_actions() -> None:
+    """End-to-end feasibility and conservation through the real action path.
+
+    The component tests each check one layer against the constraint object it
+    was handed. This drives the whole stack the way a training loop does --
+    normalized action in, ``_action_to_request`` scaling, Prosumer's
+    projection, Inverter's internal dispatch, the leaves, then power flow --
+    and asserts the PHYSICAL invariants on the realized state, which is the
+    only place a layer disagreeing with its neighbour would show up.
+
+    Actions are drawn well outside the ``[-1, 1]`` box the agent is supposed
+    to emit, in both directions, so the projection is genuinely load-bearing
+    on most steps rather than a formality.
+    """
+    environment = build_environment()
+    inverter = environment.prosumer.inverter_dynamics
+    battery = inverter.battery_dynamics
+    state = environment.reset(jr.PRNGKey(21))
+    key = jr.PRNGKey(22)
+    constraint_ever_bound = False
+
+    for _ in range(96):  # a full simulated day
+        key, subkey = jr.split(key)
+        action = jr.normal(subkey, (environment.num_agents, 2), dtype=jnp.float32) * 4.0
+        constraint_before = state.prosumer_state.s_inv_request_constraint
+
+        state = environment.step(state, action)
+        prosumer_state = state.prosumer_state
+        inverter_state = prosumer_state.inverter_state
+        battery_state = inverter_state.battery_state
+        solar_state = inverter_state.solar_state
+
+        # Feasibility: the realized flow satisfies the constraint it was
+        # projected against, as a whole (halfspaces and balls together).
+        realized_action = jnp.stack(
+            [inverter_state.s_inv_realized_kvah.real, inverter_state.s_inv_realized_kvah.imag],
+            axis=-1,
+        )
+        assert bool(constraint_before.is_feasible(realized_action, tol=1e-3))
+        assert jnp.all(
+            jnp.abs(inverter_state.s_inv_realized_kvah) <= inverter.s_inv_max_kvah + 1e-3
+        )
+
+        # Conservation: the inverter's output came from its own two sources.
+        leaves_kwh = solar_state.sol_realized_kwh + battery_state.bat_realized_kwh
+        assert jnp.allclose(
+            inverter_state.s_inv_realized_kvah.real, leaves_kwh, rtol=1e-5, atol=1e-5
+        )
+
+        # Storage and generation stay physical.
+        assert jnp.all(battery_state.bat_full_kwh >= -1e-5)
+        assert jnp.all(battery_state.bat_full_kwh <= battery.capacity_kwh + 1e-5)
+        assert jnp.allclose(
+            battery_state.bat_full_kwh + battery_state.bat_free_kwh, battery.capacity_kwh
+        )
+        assert jnp.all(solar_state.sol_realized_kwh >= 0.0)
+
+        # Net grid flow is exactly generation minus consumption.
+        assert jnp.allclose(
+            prosumer_state.s_pq_realized_kvah,
+            inverter_state.s_inv_realized_kvah - prosumer_state.load_state.s_load_realized_kvah,
+        )
+
+        # The power flow converged, so the episode stays live.
+        assert bool(state.valid)
+
+        utilization = jnp.abs(inverter_state.s_inv_realized_kvah) / inverter.s_inv_max_kvah
+        constraint_ever_bound = constraint_ever_bound or bool(jnp.any(utilization > 0.999))
+
+    assert constraint_ever_bound, (
+        "no constraint ever bound over the whole rollout, so the projection "
+        "was never actually exercised"
+    )
