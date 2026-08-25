@@ -25,7 +25,7 @@ import jax.random as jr
 from jumanji import specs
 
 from gll_env.components.environment import (
-    EnvironmentModel,
+    EnvironmentDynamics,
     EnvironmentObservation,
     EnvironmentState,
 )
@@ -43,9 +43,9 @@ class Observer(abc.ABC):
     so shapes are always consistent with the actual ``__call__`` output.
     """
 
-    _env_model: EnvironmentModel
+    _env_model: EnvironmentDynamics
 
-    def __init__(self, env_model: EnvironmentModel) -> None:
+    def __init__(self, env_model: EnvironmentDynamics) -> None:
         self._env_model = env_model
 
     @classmethod
@@ -105,12 +105,12 @@ class MarlObserver(Observer):
 
     _normalize: bool
 
-    def __init__(self, env_model: EnvironmentModel, normalize: bool = False) -> None:
+    def __init__(self, env_model: EnvironmentDynamics, normalize: bool = False) -> None:
         super().__init__(env_model)
         self._normalize = normalize
 
     @staticmethod
-    def _agent_bus_id(env_model: EnvironmentModel) -> chex.Array:
+    def _agent_bus_id(env_model: EnvironmentDynamics) -> chex.Array:
         """Global bus index of each inverter agent, shape (num_inv,)."""
         return jnp.take(env_model.grid.pq_id, env_model.prosumer.inverter_id)
 
@@ -201,7 +201,7 @@ class MarlObserver(Observer):
             solar_obs.sol_request_max,
         ]
 
-        row = jnp.ravel(jnp.stack(parts, axis=-1))
+        row = jnp.concatenate([jnp.ravel(part) for part in parts])
         return jnp.tile(row, (num_agents, 1))
 
     def state_to_observation(self, state: EnvironmentState) -> MarlObservation:

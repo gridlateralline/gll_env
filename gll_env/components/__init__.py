@@ -20,7 +20,7 @@ Fixed concrete classes — one physics model per role, no swapping::
     GridDynamics      Newton-Raphson AC power-flow on a static network
     ProsumerDynamics  Couples inverter + load via DR feasibility projection
     InverterDynamics  Couples battery + solar via DR feasibility projection
-    EnvironmentModel  Couples grid + prosumer, owns the day-time clock
+    EnvironmentDynamics Couples grid + prosumer, owns the day-time clock
     BatteryDynamics   Linear battery
     SolarDynamics     OU clearness process + cosine day envelope
     LoadDynamics      OU load-factor process modulating an H0 profile
@@ -30,7 +30,7 @@ Fixed concrete classes — one physics model per role, no swapping::
 from gll_env.components.battery import BatteryDynamics, BatteryState
 from gll_env.components.day_time import DaytimeDynamics, DaytimeState
 from gll_env.components.environment import (
-    EnvironmentModel,
+    EnvironmentDynamics,
     EnvironmentObservation,
     EnvironmentState,
 )

@@ -17,7 +17,7 @@
 
 :class:`EnvironmentModel` couples :class:`~grid.GridDynamics` and
 :class:`~prosumer.ProsumerDynamics`, owns the intra-day clock, and exposes
-``reset`` / ``step`` consumed by :class:`~generator.ProsumerGridGenerator`.
+``reset`` / ``step`` consumed by :class:`~gll_env.generator.DynamicsGenerator`.
 
 :class:`EnvironmentState` is the complete JAX-traceable episode state:
 it holds both sub-states, the day-time bookkeeping, and the PRNG key
@@ -90,7 +90,7 @@ class EnvironmentObservation:
     step_count: chex.Numeric  # () int32
     is_normalized: bool = field(default=False)
 
-    def normalize(self, environment_model: "EnvironmentModel") -> "EnvironmentObservation":
+    def normalize(self, environment_model: "EnvironmentDynamics") -> "EnvironmentObservation":
         return EnvironmentObservation(
             time_observation=self.time_observation.normalize(environment_model.time),
             grid_observation=self.grid_observation.normalize(environment_model.grid),
@@ -101,7 +101,7 @@ class EnvironmentObservation:
 
 
 @chex.dataclass(frozen=True)
-class EnvironmentModel:
+class EnvironmentDynamics:
     prosumer: ProsumerDynamics
     grid: GridDynamics
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)

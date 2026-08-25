@@ -80,7 +80,7 @@ from gll_env.algorithms.radial_feasibility import RadialFeasibility
 from gll_env.assets.serialization import load_asset_arrays
 from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics
-from gll_env.components.environment import EnvironmentModel
+from gll_env.components.environment import EnvironmentDynamics
 from gll_env.components.grid import GridDynamics
 from gll_env.components.inverter import InverterDynamics
 from gll_env.components.load import LoadDynamics
@@ -243,7 +243,7 @@ def prosumer_dynamics(
     )
 
 
-def environment_model(config: DictConfig) -> EnvironmentModel:
+def environment_model(config: DictConfig) -> EnvironmentDynamics:
     """Build a complete :class:`EnvironmentModel` from config.
 
     Config keys: ``n_steps_per_day``, ``grid``, ``prosumer``, and an
@@ -263,7 +263,7 @@ def environment_model(config: DictConfig) -> EnvironmentModel:
     prosumer = prosumer_dynamics(
         config.prosumer, num_pq=grid.num_pq, time=time, projection=projection
     )
-    return EnvironmentModel(prosumer=prosumer, grid=grid, time=time)
+    return EnvironmentDynamics(prosumer=prosumer, grid=grid, time=time)
 
 
 # A small, self-contained scenario for standalone use (jumanji.make(...),
@@ -297,7 +297,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-def default_environment_model() -> EnvironmentModel:
+def default_environment_model() -> EnvironmentDynamics:
     """Build the default scenario described by :data:`_DEFAULT_CONFIG`.
 
     No config authoring needed -- this is what

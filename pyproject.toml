@@ -30,6 +30,7 @@ dev = [
     "ty",
     "pytest",
     "pandapower>=3.5.4",
+    "jupyter>=1.1.1",
 ]
 
 [tool.hatch.version]

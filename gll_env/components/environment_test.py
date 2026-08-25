@@ -19,7 +19,7 @@ import jax.random as jr
 from gll_env.algorithms.newton_raphson import NewtonRaphson
 from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics, DaytimeState
-from gll_env.components.environment import EnvironmentModel
+from gll_env.components.environment import EnvironmentDynamics
 from gll_env.components.grid import GridDynamics
 from gll_env.components.inverter import InverterDynamics
 from gll_env.components.load import LoadDynamics
@@ -27,7 +27,7 @@ from gll_env.components.prosumer import ProsumerDynamics
 from gll_env.components.solar import SolarDynamics
 
 
-def build_environment() -> EnvironmentModel:
+def build_environment() -> EnvironmentDynamics:
     time = DaytimeDynamics(n_steps_per_day=jnp.int32(12))
     battery = BatteryDynamics(
         capacity_kwh=jnp.array([10.0], dtype=jnp.float32),
@@ -68,7 +68,7 @@ def build_environment() -> EnvironmentModel:
         nr=NewtonRaphson(),
         time=time,
     )
-    return EnvironmentModel(prosumer=prosumer, grid=grid, time=time)
+    return EnvironmentDynamics(prosumer=prosumer, grid=grid, time=time)
 
 
 def test_normalized_constraints_are_equivalent_to_physical_constraints() -> None:
