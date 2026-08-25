@@ -309,3 +309,90 @@ def test_radial_projection_no_balls() -> None:
     x_proj, _ = rp.solve(x, constraints)
 
     assert constraints.is_feasible(x_proj, tol=_TOLERANCE)
+
+
+def test_solve_returns_the_radial_point_not_the_euclidean_nearest_point() -> None:
+    """Pins which map this is, because the two are easy to confuse and the
+    difference is visible to a policy.
+
+    Against ``x_0 <= 1``, the point ``(10, 10)`` retracts to ``(1, 1)``: the
+    whole vector is scaled, so the (already feasible) second coordinate is
+    pulled back too. The Euclidean projection would be ``(1, 10)``, which is
+    strictly closer. Radial is the intended behaviour -- it preserves the
+    requested P/Q ratio -- so this asserts the scaling explicitly rather than
+    leaving it as an accident someone might later "fix".
+    """
+    constraints = ActionConstraints(
+        halfspace_a=jnp.array([[[1.0, 0.0]]], dtype=jnp.float32),
+        halfspace_b=jnp.array([[1.0]], dtype=jnp.float32),
+        ball_center=jnp.zeros((1, 0, 2), dtype=jnp.float32),
+        ball_radius=jnp.zeros((1, 0), dtype=jnp.float32),
+    )
+    x = jnp.array([[10.0, 10.0]], dtype=jnp.float32)
+
+    projected, converged = RadialFeasibility().solve(x, constraints)
+
+    assert bool(converged)
+    assert jnp.allclose(projected, jnp.array([[1.0, 1.0]]))
+    # Direction preserved: the returned point is a non-negative multiple of x.
+    assert jnp.allclose(projected[0, 0] * x[0, 1], projected[0, 1] * x[0, 0])
+    # And it is NOT the nearest feasible point, by construction.
+    assert not jnp.allclose(projected, jnp.array([[1.0, 10.0]]))
+
+
+def test_origin_infeasible_constraints_fail_open_and_report_non_convergence() -> None:
+    """Documents the bail-out contract, including its sharp edge.
+
+    When the origin is outside some constraint the star-shaped assumption is
+    void, so ``solve`` refuses to run and reports ``converged=False``. It
+    returns ``x`` UNCHANGED -- it does not clamp, and it does not fall back
+    to the origin (which is itself infeasible in this regime). Callers must
+    therefore treat ``converged=False`` as "this action was never
+    constrained", not merely as a diagnostic.
+
+    In this tree that is safe in depth rather than by luck: Prosumer feeds
+    the unprojected request into Inverter, whose own constraint is provably
+    origin-feasible and so still bounds ``|s_inv|``; only the grid-connection
+    ball goes unenforced, and ``valid=False`` propagates up to terminate the
+    episode on that same step.
+    """
+    constraints = ActionConstraints(
+        halfspace_a=jnp.array([[[1.0, 0.0]]], dtype=jnp.float32),
+        halfspace_b=jnp.array([[-5.0]], dtype=jnp.float32),  # excludes the origin
+        ball_center=jnp.zeros((1, 0, 2), dtype=jnp.float32),
+        ball_radius=jnp.zeros((1, 0), dtype=jnp.float32),
+    )
+    x = jnp.array([[1000.0, 1000.0]], dtype=jnp.float32)
+
+    projected, converged = RadialFeasibility().solve(x, constraints)
+
+    assert not bool(converged)
+    assert jnp.array_equal(projected, x)
+    assert not bool(constraints.is_feasible(projected, tol=1e-3))
+
+
+def test_one_malformed_agent_suppresses_projection_for_the_whole_batch() -> None:
+    """``is_feasible`` reduces over the agent axis, so the origin-feasibility
+    check is all-or-nothing across the batch: a single agent with malformed
+    constraints sends EVERY agent down the bail-out branch, including
+    well-formed ones whose own actions would otherwise have been projected.
+
+    Pinned as current behaviour rather than asserted as desirable. It is
+    unreachable through the components in this tree (every constraint built
+    here provably contains the origin), but it is a live hazard for a custom
+    leaf component, and the blast radius is the whole batch rather than the
+    one agent at fault.
+    """
+    constraints = ActionConstraints(
+        halfspace_a=jnp.array([[[1.0, 0.0]], [[1.0, 0.0]]], dtype=jnp.float32),
+        halfspace_b=jnp.array([[1.0], [-5.0]], dtype=jnp.float32),  # agent 1 excludes the origin
+        ball_center=jnp.zeros((2, 0, 2), dtype=jnp.float32),
+        ball_radius=jnp.zeros((2, 0), dtype=jnp.float32),
+    )
+    x = jnp.array([[10.0, 10.0], [10.0, 10.0]], dtype=jnp.float32)
+
+    projected, converged = RadialFeasibility().solve(x, constraints)
+
+    assert not bool(converged)
+    # Agent 0 is well-formed and violates its own halfspace on the way out.
+    assert float(projected[0, 0]) > 1.0

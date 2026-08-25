@@ -26,10 +26,22 @@ Every halfspace and ball is assumed to contain the origin (see
 nonempty (the origin itself is always feasible) *provided that
 invariant actually holds*, and -- this is the fact this module actually
 exploits -- makes the feasible set star-shaped from the origin. That
-means the projection of any point `x` onto the set can be computed
-exactly in closed form: walk the ray `t * x` for `t` from 0 outward, and
-stop at the first `t` where the ray touches the boundary of any
-halfspace or ball. Each halfspace/ball contributes one such `t`
+means any point `x` can be mapped onto the set exactly in closed form:
+walk the ray `t * x` for `t` from 0 outward, and stop at the first `t`
+where the ray touches the boundary of any halfspace or ball.
+
+Note what this map is and is not. It is the *radial retraction* -- the
+feasible point in the direction of `x` -- NOT the Euclidean nearest
+feasible point. For `x = (10, 10)` against `x_0 <= 1` it returns
+`(1, 1)`, while the metric projection would return `(1, 10)`. That is a
+deliberate choice, not an approximation of one: scaling preserves the
+direction of the request, so an action asking for too much active power
+has its reactive power pulled back in the same proportion, keeping the
+requested P/Q ratio (the power factor) intact. It is also exact,
+deterministic, continuous in `x`, and cheap. Callers that genuinely need
+the nearest feasible point need a different algorithm -- this is not it.
+
+Each halfspace/ball contributes one such `t`
 independently (a 1D root-find: linear for a halfspace, the positive
 root of a quadratic for a ball -- the standard ray-sphere intersection
 formula), and the binding constraint is whichever gives the smallest
@@ -39,14 +51,16 @@ unchanged rather than extrapolated outward.
 This is exact (no iteration, no relaxation parameter, no convergence
 criterion to satisfy) and correct by construction. An earlier version of
 this module ran a naive multi-set generalization of Douglas-Rachford/
-POCS-style reflect-and-average splitting instead; that only guarantees
-converging to *some* point in the intersection (a feasibility problem),
-not the nearest point to `x` (a projection problem) -- for a request far
-outside a tight box (the common case here: a policy asking for more than
-the currently available battery/solar headroom), an over-relaxed
-reflection step could overshoot straight through the feasible region and
-"converge" (zero further movement) the moment it happened to land
-anywhere inside, a different point every time the box shifted slightly.
+POCS-style reflect-and-average splitting instead. That only guarantees
+converging to *some* point in the intersection, with no control over
+which one: for a request far outside a tight box (the common case here:
+a policy asking for more than the currently available battery/solar
+headroom), an over-relaxed reflection step could overshoot straight
+through the feasible region and "converge" (zero further movement) the
+moment it happened to land anywhere inside -- a different point every
+time the box shifted slightly. The radial map is not nearest-point
+either, but it is a fixed, closed-form function of `x` and the
+constraints, which is what a policy needs to be able to learn against.
 
 `RadialFeasibility.solve` short-circuits in two cases before computing
 anything: if the origin is infeasible (malformed constraints; see
