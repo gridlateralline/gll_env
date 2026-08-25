@@ -124,7 +124,11 @@ def grid_dynamics(config: DictConfig, time: DaytimeDynamics) -> GridDynamics:
     """
     params: dict[str, Any] = dict(load_asset_arrays(config.grid_model, asset_dir=GRID_ASSETS_DIR))
     if "v_bus_deviation_pu" in config:
-        params["v_bus_deviation_pu"] = jnp.asarray(config.v_bus_deviation_pu, dtype=jnp.float32)
+        # Config key kept for backward compatibility; the field it feeds was
+        # renamed to voltage_deviation_ref_pu.
+        params["voltage_deviation_ref_pu"] = jnp.asarray(
+            config.v_bus_deviation_pu, dtype=jnp.float32
+        )
     return GridDynamics(
         **params,
         nr=newton_raphson(config.get("newton_raphson", {})),

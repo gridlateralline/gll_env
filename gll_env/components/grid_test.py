@@ -15,6 +15,7 @@
 
 import chex
 import jax.numpy as jnp
+import pytest
 
 from gll_env.algorithms.newton_raphson import NewtonRaphson
 from gll_env.components.day_time import DaytimeDynamics
@@ -74,7 +75,7 @@ class FakeNewtonRaphson(NewtonRaphson):
         return self.v_bus_out, self.s_inj_bus_out, (self.nr_steps, self.converged)
 
 
-def build_grid_model(nr: FakeNewtonRaphson) -> GridDynamics:
+def build_grid_model(nr: FakeNewtonRaphson, n_steps_per_day: int = 96) -> GridDynamics:
     return GridDynamics(
         slack_id=jnp.array([0], dtype=jnp.int32),
         pq_id=jnp.array([1], dtype=jnp.int32),
@@ -87,7 +88,7 @@ def build_grid_model(nr: FakeNewtonRaphson) -> GridDynamics:
         ),
         position=jnp.array([[0.0, 0.0], [1.0, 0.0]], dtype=jnp.float32),
         nr=nr,
-        time=DaytimeDynamics(n_steps_per_day=jnp.int32(96)),
+        time=DaytimeDynamics(n_steps_per_day=jnp.int32(n_steps_per_day)),
     )
 
 
@@ -151,3 +152,103 @@ class TestGridStep:
         assert jnp.allclose(next_state.bus_power_injection_pu, fake_nr.s_inj_bus_out)
         assert int(next_state.nr_steps) == 7
         assert not bool(next_state.valid)
+
+
+class TestGridUnits:
+    """Grid is the one place in the tree where per-interval ENERGY has to
+    become POWER.
+
+    Every component upstream speaks kWh/kvarh per interval, but an AC
+    power-flow solution is a statement about instantaneous power: the
+    admittance matrix relates voltages to power injections, with no notion of
+    an interval at all. ``kwh_to_pu`` is the conversion, and it is the only
+    correct place in the tree to divide by ``step_duration_h`` -- which is
+    exactly why the factor must appear here and nowhere else.
+    """
+
+    @staticmethod
+    def _model(n_steps_per_day: int) -> GridDynamics:
+        return build_grid_model(
+            FakeNewtonRaphson(
+                v_bus_out=jnp.array([1.0 + 0.0j, 1.0 + 0.0j], dtype=jnp.complex64),
+                s_inj_bus_out=jnp.array([0.0 + 0.0j, 0.0 + 0.0j], dtype=jnp.complex64),
+                nr_steps=jnp.asarray(3, dtype=jnp.int32),
+                converged=jnp.asarray(True),
+            ),
+            n_steps_per_day=n_steps_per_day,
+        )
+
+    def test_kwh_to_pu_converts_energy_to_the_power_that_delivers_it(self) -> None:
+        """100 kWh drawn over a 2h interval is 50 kW, not 100 kW."""
+        model = self._model(n_steps_per_day=12)  # step_duration_h == 2.0
+
+        power_pu = model.kwh_to_pu(jnp.float32(100.0))
+
+        assert float(model.pu_to_kw(power_pu)) == pytest.approx(50.0)
+        assert float(power_pu) == pytest.approx(100.0 / 2.0 / 1000.0 / float(model.base_s_mva))
+
+    @pytest.mark.parametrize("n_steps_per_day", [12, 96])
+    def test_energy_pu_round_trip_is_the_identity(self, n_steps_per_day: int) -> None:
+        model = self._model(n_steps_per_day)
+        energy_kwh = jnp.array([100.0, -37.5], dtype=jnp.float32)
+
+        assert jnp.allclose(model.pu_to_kwh(model.kwh_to_pu(energy_kwh)), energy_kwh, rtol=1e-5)
+        assert jnp.allclose(model.pu_to_kw(model.kw_to_pu(energy_kwh)), energy_kwh, rtol=1e-5)
+
+    def test_the_solver_sees_the_same_power_at_any_step_duration(self) -> None:
+        """The physical scenario -- a constant 50 kW / 20 kvar draw -- is one
+        thing; how finely the day is discretized is another. The injection
+        handed to Newton-Raphson must depend only on the former.
+
+        Read off the FakeNewtonRaphson's recorded call rather than off a
+        conversion helper, so this covers step()'s own wiring and not just the
+        arithmetic in isolation.
+        """
+        injections = []
+        for n_steps_per_day in (12, 96):
+            model = self._model(n_steps_per_day)
+            step_duration_h = float(model.time.step_duration_h)
+            state = model.reset()
+
+            model.step(
+                state=state,
+                p_pq_request_kwh=jnp.array([50.0 * step_duration_h], dtype=jnp.float32),
+                q_pq_request_kvarh=jnp.array([20.0 * step_duration_h], dtype=jnp.float32),
+            )
+            recorded = model.nr.calls[-1]["s_inj_bus_in"]
+            injections.append(recorded[model.pq_id])
+
+        assert jnp.allclose(injections[0], injections[1], rtol=1e-5), (
+            "per-unit injection must depend on the physical power, not on "
+            f"n_steps_per_day; got {injections[0]} vs {injections[1]}"
+        )
+        # And it is the right value: 50 kW / (base_s_mva * 1000).
+        model = self._model(96)
+        assert jnp.allclose(injections[0].real, 50.0 / (float(model.base_s_mva) * 1000.0))
+
+
+class TestGridConfiguration:
+    def test_non_positive_voltage_deviation_reference_is_clamped(self) -> None:
+        """The clamp has to land on the field ``normalize()`` actually reads.
+
+        ``voltage_deviation_ref_pu`` is a divisor in the observation
+        normalization, so ``__post_init__`` floors it at a tiny positive
+        value. Asserted on the public field rather than on whatever
+        ``__post_init__`` happens to write, because an earlier version wrote
+        the clamped value to a differently-named attribute and left the real
+        field untouched -- silently inert, since ``safe_normalize`` maps the
+        unclamped non-positive scale to zero instead of raising.
+        """
+        model = build_grid_model(
+            FakeNewtonRaphson(
+                v_bus_out=jnp.array([1.0 + 0.0j, 1.0 + 0.0j], dtype=jnp.complex64),
+                s_inj_bus_out=jnp.array([0.0 + 0.0j, 0.0 + 0.0j], dtype=jnp.complex64),
+                nr_steps=jnp.asarray(0, dtype=jnp.int32),
+                converged=jnp.asarray(True),
+            ),
+        )
+        object.__setattr__(model, "voltage_deviation_ref_pu", jnp.float32(-0.5))
+        model.__post_init__()
+
+        assert float(model.voltage_deviation_ref_pu) > 0.0
+        assert not hasattr(model, "v_bus_deviation_ref")
