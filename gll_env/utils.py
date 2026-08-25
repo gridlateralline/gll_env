@@ -13,10 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
 
-def main() -> None:
-    print("Hello from gll-env!")
+import jax.numpy as jnp
 
 
-if __name__ == "__main__":
-    main()
+def safe_normalize(value: Any, scale: Any) -> jnp.ndarray:
+    """Normalize by a non-negative scale, returning zero for zero scales."""
+    value_array = jnp.asarray(value)
+    scale_array = jnp.asarray(scale)
+    return jnp.where(scale_array > 0.0, value_array / scale_array, jnp.zeros_like(value_array))
