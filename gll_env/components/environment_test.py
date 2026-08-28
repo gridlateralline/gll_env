@@ -107,7 +107,7 @@ def test_infeasible_normalized_requests_are_projected_and_state_remains_consiste
         ),
     )
     old_key = state.key
-    next_state = environment.step(state, jnp.array([[100.0, -100.0]], dtype=jnp.float32))
+    next_state, _ = environment.step(state, jnp.array([[100.0, -100.0]], dtype=jnp.float32))
 
     realized_request = next_state.prosumer_state.inverter_state.s_inv_realized_kvah
     scale = jnp.asarray(environment.prosumer.inverter_dynamics.s_inv_max_kvah)
@@ -136,7 +136,7 @@ def test_clock_wraps_at_day_boundary() -> None:
         ),
     )
 
-    next_state = environment.step(state, jnp.zeros((1, 2), dtype=jnp.float32))
+    next_state, _ = environment.step(state, jnp.zeros((1, 2), dtype=jnp.float32))
 
     assert int(next_state.time_state.day_step) == 0
     assert int(next_state.prosumer_state.time_state.day_step) == 0
@@ -170,7 +170,7 @@ def test_every_physical_invariant_survives_a_full_day_of_out_of_range_actions() 
         action = jr.normal(subkey, (environment.num_agents, 2), dtype=jnp.float32) * 4.0
         constraint_before = state.prosumer_state.s_inv_request_constraint
 
-        state = environment.step(state, action)
+        state, _ = environment.step(state, action)
         prosumer_state = state.prosumer_state
         inverter_state = prosumer_state.inverter_state
         battery_state = inverter_state.battery_state
@@ -318,7 +318,7 @@ def test_reported_bounds_are_always_feasible_in_the_full_two_dimensional_set() -
             ), f"reported bound infeasible at step {step}"
 
         action = jnp.full((environment.num_agents, 1), 0.8, dtype=jnp.float32)
-        state = environment.step(state, action)
+        state, _ = environment.step(state, action)
 
 
 def test_reported_interval_always_contains_zero_active_power() -> None:
@@ -333,7 +333,7 @@ def test_reported_interval_always_contains_zero_active_power() -> None:
         p_min = jnp.negative(jnp.asarray(state.action_constraints.halfspace_b)[:, 1])
         assert jnp.all(p_min <= 0.0)
         assert jnp.all(p_max >= 0.0)
-        state = environment.step(
+        state, _ = environment.step(
             state, jnp.full((environment.num_agents, 1), -0.9, dtype=jnp.float32)
         )
 
@@ -354,7 +354,7 @@ def test_stays_feasible_when_the_curve_demands_more_than_the_connection_can_carr
         p_max = jnp.asarray(state.action_constraints.halfspace_b)[:, 0]
         p_min = jnp.negative(jnp.asarray(state.action_constraints.halfspace_b)[:, 1])
         assert jnp.all(p_min <= 0.0) and jnp.all(p_max >= 0.0)
-        state = environment.step(
+        state, _ = environment.step(
             state, jnp.full((environment.num_agents, 1), 1.0, dtype=jnp.float32)
         )
     assert bool(state.valid)
@@ -372,7 +372,7 @@ def test_realized_reactive_power_matches_the_setpoint_the_agent_was_shown() -> N
 
     for _ in range(12):
         expected_q = state.q_setpoint_kvarh
-        state = environment.step(
+        state, _ = environment.step(
             state, jnp.full((environment.num_agents, 1), 1.0, dtype=jnp.float32)
         )
         realized_q = state.prosumer_state.inverter_state.s_inv_realized_kvah.imag
@@ -402,7 +402,7 @@ def test_a_full_day_of_out_of_range_actions_keeps_every_invariant() -> None:
 
     for step in range(int(environment.time.n_steps_per_day)):
         action = jnp.full((environment.num_agents, 1), 50.0 * (-1.0) ** step, dtype=jnp.float32)
-        state = environment.step(state, action)
+        state, _ = environment.step(state, action)
         assert bool(state.valid)
         realized = state.prosumer_state.inverter_state.s_inv_realized_kvah
         assert jnp.all(jnp.abs(realized) <= scale + 1e-4)

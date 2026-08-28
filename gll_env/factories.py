@@ -94,7 +94,7 @@ from gll_env.grid_codes.swiss_lv import (
     SwissLvGridCode,
     rated_q_max_kvar,
 )
-from gll_env.rewards.base import BaseReward, RewardFn
+from gll_env.rewards.base import BaseReward, RewardDynamics, StatelessReward
 from gll_env.rewards.leg import LegSettlementReward, Payments
 
 GRID_ASSETS_DIR = Path(__file__).with_name("assets").joinpath("components_grid")
@@ -326,7 +326,7 @@ def payments(config: DictConfig) -> Payments:
     return Payments(**load_asset_arrays(config.payments, asset_dir=LEG_ASSETS_DIR))
 
 
-def leg_settlement_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+def leg_settlement_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardDynamics:
     """Build a :class:`LegSettlementReward`.
 
     Config: ``payments`` (asset name) -- see :func:`payments`.
@@ -334,10 +334,10 @@ def leg_settlement_reward(config: DictConfig, env_model: EnvironmentDynamics) ->
     return LegSettlementReward(payments=payments(config), prosumer=env_model.prosumer)
 
 
-def base_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+def base_reward(config: DictConfig, env_model: EnvironmentDynamics) -> RewardDynamics:
     """Build the placeholder :class:`BaseReward`, which takes no parameters."""
     del config, env_model
-    return BaseReward()
+    return StatelessReward(BaseReward())
 
 
 # Reward name -> builder. Add an entry here to make a new reward selectable
@@ -348,7 +348,7 @@ REWARD_BUILDERS = {
 }
 
 
-def reward_fn(config: DictConfig, env_model: EnvironmentDynamics) -> RewardFn:
+def reward_fn(config: DictConfig, env_model: EnvironmentDynamics) -> RewardDynamics:
     """Build the reward named by config, against an already-built environment model.
 
     :class:`~gll_env.env.ProsumerGrid` takes the reward as a constructor
@@ -395,12 +395,18 @@ def environment_model(config: DictConfig) -> EnvironmentDynamics:
     prosumer = prosumer_dynamics(
         config.prosumer, num_pq=grid.num_pq, time=time, projection=projection
     )
-    return EnvironmentDynamics(
+    model = EnvironmentDynamics(
         prosumer=prosumer,
         grid=grid,
         time=time,
         grid_code=grid_code(config.get("grid_code", {}), prosumer),
     )
+    if "reward" in config:
+        # Built against the finished model -- LegSettlementReward reads
+        # `inverter_id` and the clock off it -- then swapped in, rather than
+        # threading a half-built model into the reward builders.
+        model = model.replace(reward=reward_fn(config.reward, model))
+    return model
 
 
 # A small, self-contained scenario for standalone use (jumanji.make(...),

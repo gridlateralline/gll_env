@@ -202,10 +202,11 @@ def test_day_step_wraps_with_the_clock() -> None:
         interval_end=jnp.float32(1.0),
     )
     state = env_model.reset(jr.PRNGKey(0), time_state=last)
-    new_state = env_model.step(state, jnp.zeros((env_model.num_agents, 2), dtype=jnp.float32))
+    new_state, _ = env_model.step(state, jnp.zeros((env_model.num_agents, 2), dtype=jnp.float32))
 
     assert int(new_state.time_state.day_step) == 0
-    assert jnp.all(jnp.isfinite(reward(state, new_state)))
+    _, settled = reward(reward.reset(jr.PRNGKey(0)), (state, new_state), env_model)
+    assert jnp.all(jnp.isfinite(settled))
 
 
 def test_factory_builds_the_bundled_tariffs() -> None:

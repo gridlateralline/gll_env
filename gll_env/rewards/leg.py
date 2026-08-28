@@ -33,13 +33,55 @@ asset (see :mod:`gll_env.assets.rewards_leg.generator`).
 """
 
 from functools import cached_property
+from typing import TYPE_CHECKING
 
 import chex
 import jax.numpy as jnp
 
-from gll_env.components.environment import EnvironmentState
 from gll_env.components.prosumer import ProsumerDynamics
-from gll_env.rewards.base import RewardFn
+from gll_env.rewards.base import CausalReward
+from gll_env.types import RewardObservation, RewardState
+
+if TYPE_CHECKING:  # pragma: no cover -- rewards/ is imported by components/
+    from gll_env.components.environment import EnvironmentDynamics, EnvironmentState
+
+
+@chex.dataclass(frozen=True)
+class LegRewardState(RewardState):
+    """The settlement this reward last computed, kept for publication.
+
+    LEG settlement itself is memoryless -- the community match is recomputed
+    from scratch each interval. What this state carries is the ``(num_pq,)``
+    result, which the ``(num_agents,)`` reward array cannot: connection points
+    without an inverter take part in the community match, so their load is
+    real supply and demand for the pool, but they have no agent to be
+    attributed to. Without this they are invisible to anything downstream,
+    including any fairness analysis -- which is exactly the population whose
+    fairness is worth analysing.
+    """
+
+    settlement_chf: chex.Array  # (num_pq,) float32, signed
+
+
+@chex.dataclass(frozen=True)
+class LegRewardObservation(RewardObservation):
+    """Per-connection-point settlement for the interval that just ended."""
+
+    settlement_chf: chex.Array  # (num_pq,) float32, signed
+    is_normalized: bool = False
+
+    def normalize(self, reward_dynamics: "LegSettlementReward") -> "LegRewardObservation":
+        """Scale by the largest rate on the books, so the result sits in
+        roughly [-1, 1] for a connection point transacting its full rating.
+
+        A settlement is a price times an energy, and the energy half is
+        already normalized by ``s_pq_max_kvah`` elsewhere in the observation;
+        dividing by the peak rate is the matching half.
+        """
+        return LegRewardObservation(
+            settlement_chf=self.settlement_chf / reward_dynamics.payment_scale_chf_per_kwh,
+            is_normalized=True,
+        )
 
 
 @chex.dataclass(frozen=True)
@@ -78,7 +120,7 @@ class Payments:
         chex.assert_type(self.payment_vnb_consumption, jnp.float32)
 
 
-class LegSettlementReward(RewardFn):
+class LegSettlementReward(CausalReward):
     """Per-interval LEG settlement in CHF, one reward per agent.
 
     Billed on ``s_pq_realized_kvah.real`` — the net active energy metered at
@@ -122,6 +164,23 @@ class LegSettlementReward(RewardFn):
         self._payments = payments
         self._inverter_id = inverter_id
         self._num_pq = prosumer.num_pq
+
+    @cached_property
+    def payment_scale_chf_per_kwh(self) -> chex.Numeric:
+        """Largest rate on the books, the divisor :class:`LegRewardObservation`
+        normalizes by. Read off the rates rather than hardcoded so a tariff
+        with different bands normalizes against its own peak.
+        """
+        return jnp.maximum(
+            jnp.max(jnp.abs(jnp.asarray(self._payments.payment_leg_injection))),
+            jnp.maximum(
+                jnp.max(jnp.abs(jnp.asarray(self._payments.payment_vnb_injection))),
+                jnp.maximum(
+                    jnp.max(jnp.abs(jnp.asarray(self._payments.payment_leg_consumption))),
+                    jnp.max(jnp.abs(jnp.asarray(self._payments.payment_vnb_consumption))),
+                ),
+            ),
+        )
 
     @staticmethod
     def _split_injection_consumption(e_pq_kwh: chex.Array) -> tuple[chex.Array, chex.Array]:
@@ -191,12 +250,20 @@ class LegSettlementReward(RewardFn):
         )
         return settlement_injection_chf + settlement_consumption_chf
 
-    def __call__(
+    def reset(self, key: chex.PRNGKey) -> LegRewardState:
+        del key
+        return LegRewardState(
+            settlement_chf=jnp.zeros((self._num_pq,), dtype=jnp.float32),
+        )
+
+    def settle(
         self,
-        state: EnvironmentState,
-        new_state: EnvironmentState,
-    ) -> chex.Array:
-        del state  # settlement depends only on the interval that just ended
+        reward_state: RewardState,
+        state: "EnvironmentState",
+        new_state: "EnvironmentState",
+        dynamics: "EnvironmentDynamics",
+    ) -> tuple[LegRewardState, chex.Array]:
+        del state, reward_state, dynamics  # settlement depends only on the interval that ended
         # `s_pq_realized_kvah` and `time_state` are written together by
         # ProsumerDynamics.step, so `day_step` indexes exactly the interval
         # this energy was metered over.
@@ -205,5 +272,11 @@ class LegSettlementReward(RewardFn):
             e_pq_kwh=e_pq_kwh,
             day_step=new_state.time_state.day_step,
             payments=self._payments,
+        ).astype(jnp.float32)
+        reward = settlement_chf[self._inverter_id]
+        return LegRewardState(settlement_chf=settlement_chf), reward
+
+    def observation(self, reward_state: RewardState) -> LegRewardObservation:
+        return LegRewardObservation(
+            settlement_chf=jnp.asarray(reward_state.settlement_chf, dtype=jnp.float32),
         )
-        return settlement_chf[self._inverter_id].astype(jnp.float32)

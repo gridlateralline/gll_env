@@ -57,7 +57,15 @@ from gll_env.env import EnvironmentState, ProsumerGrid
 from gll_env.generator import ConfigGenerator, DynamicsGenerator
 from gll_env.grid_codes import GridCode, NoGridCode, SwissLvGridCode
 from gll_env.observer import MarlObserver, RawObserver
-from gll_env.rewards import BaseReward, LegSettlementReward, Payments, RewardFn
+from gll_env.rewards import (
+    BaseReward,
+    CausalReward,
+    LegSettlementReward,
+    Payments,
+    RewardDynamics,
+    RewardFn,
+    StatelessReward,
+)
 
 jumanji.register(
     id="ProsumerGrid-v0",
@@ -67,6 +75,7 @@ jumanji.register(
 
 __all__ = [
     "BaseReward",
+    "CausalReward",
     "ConfigGenerator",
     "DynamicsGenerator",
     "EnvironmentState",
@@ -77,6 +86,8 @@ __all__ = [
     "Payments",
     "ProsumerGrid",
     "RawObserver",
+    "RewardDynamics",
     "RewardFn",
+    "StatelessReward",
     "SwissLvGridCode",
 ]

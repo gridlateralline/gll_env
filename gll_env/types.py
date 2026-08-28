@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import chex
 import jax.numpy as jnp
@@ -283,3 +283,87 @@ class MarlObservation:
     global_state: chex.Array  # (num_agents, num_state_features)
     action_constraints: Optional[ActionConstraints] = None  # (num_agents, ...)
     step_count: Optional[chex.Array] = None  # (num_agents, )
+
+
+@dataclass(frozen=True)
+class RewardState:
+    """Marker base for the reward component's carried state.
+
+    Lives here rather than in :mod:`gll_env.rewards` for the same reason
+    :class:`ActionConstraints` does: :class:`EnvironmentState` has a field of
+    this type, while ``rewards/base.py`` needs ``EnvironmentState`` in its own
+    signatures. One of the two imports has to be deferred, and putting the
+    shared vocabulary here is what keeps ``rewards/`` free to import
+    ``components/`` normally.
+
+    Concrete rewards subclass this with whatever they carry -- a running peak,
+    a revenue balance, the settlement just computed. A reward that carries
+    nothing uses :class:`~gll_env.rewards.base.EmptyRewardState`.
+
+    Being *in the state* is what makes a history-dependent reward legitimate:
+    a reward whose value depends on the past is not a function of the
+    transition alone, so an environment that keeps that history outside
+    :class:`EnvironmentState` is no longer Markov and no longer reproducible
+    from ``reset(key)``.
+    """
+
+
+@dataclass(frozen=True)
+class RewardObservation:
+    """Marker base for what a reward makes visible to observers.
+
+    The reward is a component like any other in this tree, so it exposes an
+    observation and that observation normalizes -- which is what keeps the
+    normalized (RL) path uniform when a reward publishes a quantity.
+
+    What a reward exposes is its own business; nothing in the environment
+    reads named fields off this type. :class:`~gll_env.env.ProsumerGrid`
+    forwards the whole object into ``extras["reward"]``, so a reward can
+    surface per-connection-point detail that the ``(num_agents,)`` reward
+    array cannot carry -- see
+    :class:`~gll_env.rewards.leg.LegRewardObservation`.
+    """
+
+    def normalize(self, reward_dynamics: Any) -> "RewardObservation":
+        """Return the normalized form. The base marker carries nothing."""
+        del reward_dynamics
+        return self
+
+
+@dataclass(frozen=True)
+class AlignedTransition:
+    """One temporally coherent transition, for learners and for scoring.
+
+    Every field describes the *same* interval, which is the point of the type:
+    :attr:`action` is the action that produced :attr:`reward`, and
+    :attr:`observation` / :attr:`next_observation` bracket it. That is NOT in
+    general the interval ``TimeStep.observation`` describes -- see
+    :meth:`gll_env.env.ProsumerGrid.step` for the two-clock contract and why
+    the acting observation is the one in the timestep.
+
+    Emitted on every step as ``extras["transition"]``. Today the environment
+    is causal, so this is the previous state, the action just passed and the
+    settlement for the interval just ended -- all degenerate, all consistent
+    with the general case. Consumers written against it now keep working
+    unchanged if a lookahead reward is ever introduced; see
+    ``docs/lookahead_rewards.md``.
+
+    Attributes:
+        observation: Observation before the action, i.e. of the state the
+            action was chosen in.
+        action: Shape (num_agents, action_dim). The action taken in
+            :attr:`observation`.
+        reward: Shape (num_agents,). The settlement for the interval that
+            action produced.
+        next_observation: Observation after the action.
+        valid: Scalar bool. ``False`` marks a transition that must be dropped
+            by on-policy learners and by scoring -- a warm-up step whose
+            action came from something other than the policy under study.
+            Always ``True`` while the environment is causal.
+    """
+
+    observation: Any
+    action: chex.Array
+    reward: chex.Array
+    next_observation: Any
+    valid: chex.Array
