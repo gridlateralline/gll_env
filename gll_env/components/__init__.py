@@ -25,6 +25,7 @@ Fixed concrete classes — one physics model per role, no swapping::
     SolarDynamics     OU clearness process + cosine day envelope
     LoadDynamics      OU load-factor process modulating an H0 profile
     DaytimeDynamics   Intra-day clock shared by every component above
+    GridCode          Optional connection rules; Q(U) drops the agent to 1-D
 """
 
 from gll_env.components.battery import BatteryDynamics, BatteryState
@@ -35,6 +36,7 @@ from gll_env.components.environment import (
     EnvironmentState,
 )
 from gll_env.components.grid import GridDynamics, GridState
+from gll_env.components.grid_code import GridCode, QofUCharacteristic
 from gll_env.components.inverter import InverterDynamics, InverterState
 from gll_env.components.load import LoadDynamics, LoadState
 from gll_env.components.prosumer import ProsumerDynamics, ProsumerState

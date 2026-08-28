@@ -53,6 +53,8 @@ Config layout::
         grid_model: cigre_lv_consumer   # asset name
         newton_raphson: {max_iterations: 10, tolerance: 1.0e-4}   # optional
         v_bus_deviation_pu: 0.1                                   # optional
+    grid_code:                       # optional; absent means no law, action_dim 2
+        q_of_u: true                 # NE7 4.3.2 Q(U) curve -> action_dim 1
     prosumer:
         s_pq_max_kVA: 15.0              # scalar or per-pq list
         inverter_id: [0, 1, 2]          # optional, defaults to one inverter per pq bus
@@ -82,6 +84,7 @@ from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics
 from gll_env.components.environment import EnvironmentDynamics
 from gll_env.components.grid import GridDynamics
+from gll_env.components.grid_code import GridCode, QofUCharacteristic, rated_q_max_kvar
 from gll_env.components.inverter import InverterDynamics
 from gll_env.components.load import LoadDynamics
 from gll_env.components.prosumer import ProsumerDynamics
@@ -250,6 +253,40 @@ def prosumer_dynamics(
     )
 
 
+def grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
+    """Build the :class:`GridCode` binding the agent's action space.
+
+    Config (all optional; an absent ``grid_code`` block means no law applies
+    and the agent keeps both degrees of freedom)::
+
+        grid_code:
+            q_of_u: true            # NE7 4.3.2 standard curve -> action_dim 1
+            q_max_kvar: 6.5         # optional override of Tabelle 3's rating-based Q_max
+            voltage_pu: [0.93, 0.97, 1.03, 1.07]   # optional VNB-specific curve
+            q_ratio:   [1.0, 0.0, 0.0, -1.0]       # (NE7 4.3(2) allows per-plant settings)
+
+    ``q_max_kvar`` defaults to :func:`rated_q_max_kvar` applied to each
+    inverter's own ``s_inv_max_kVA``, which is what Tabelle 3 prescribes --
+    so the standard case needs ``q_of_u: true`` and nothing else.
+    """
+    if not config.get("q_of_u", False):
+        return GridCode()
+
+    num_inv = prosumer.num_inv
+    s_inv_max_kva = jnp.asarray(prosumer.inverter_dynamics.s_inv_max_kva, dtype=jnp.float32)
+    q_max_kvar = (
+        _broadcast(config.q_max_kvar, (num_inv,))
+        if "q_max_kvar" in config
+        else rated_q_max_kvar(s_inv_max_kva)
+    )
+    kwargs: dict[str, Any] = {}
+    if "voltage_pu" in config:
+        kwargs["voltage_pu"] = jnp.asarray(config.voltage_pu, dtype=jnp.float32)
+    if "q_ratio" in config:
+        kwargs["ratio"] = jnp.asarray(config.q_ratio, dtype=jnp.float32)
+    return GridCode(q_of_u=QofUCharacteristic(q_max_kvar=q_max_kvar, **kwargs))
+
+
 def payments(config: DictConfig) -> Payments:
     """Load LEG tariff rates from a safetensors asset.
 
@@ -328,7 +365,12 @@ def environment_model(config: DictConfig) -> EnvironmentDynamics:
     prosumer = prosumer_dynamics(
         config.prosumer, num_pq=grid.num_pq, time=time, projection=projection
     )
-    return EnvironmentDynamics(prosumer=prosumer, grid=grid, time=time)
+    return EnvironmentDynamics(
+        prosumer=prosumer,
+        grid=grid,
+        time=time,
+        grid_code=grid_code(config.get("grid_code", {}), prosumer),
+    )
 
 
 # A small, self-contained scenario for standalone use (jumanji.make(...),
