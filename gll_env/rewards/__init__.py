@@ -15,17 +15,44 @@
 
 """Reward functions for the ProsumerGrid environment.
 
-:class:`~gll_env.rewards.base.RewardFn` is the injectable ABC; every concrete
-reward lives in its own module here and is selected from config through
+A reward is a *rule*, not physics -- the same category as
+:mod:`gll_env.grid_codes`, which is why neither lives in ``components/``.
+What it does borrow from ``components/`` is the dynamics/state split: see
+:class:`~gll_env.rewards.base.RewardDynamics`.
+
+Concrete tariffs subclass :class:`~gll_env.rewards.base.CausalReward`, live in
+their own module here, and are selected from config through
 :func:`gll_env.factories.reward_fn`.
 """
 
-from gll_env.rewards.base import BaseReward, RewardFn
-from gll_env.rewards.leg import LegSettlementReward, Payments
+from gll_env.rewards.base import (
+    BaseReward,
+    CausalReward,
+    EmptyRewardObservation,
+    EmptyRewardState,
+    RewardDynamics,
+    RewardFn,
+    StatelessReward,
+    default_reward,
+)
+from gll_env.rewards.leg import (
+    LegRewardObservation,
+    LegRewardState,
+    LegSettlementReward,
+    Payments,
+)
 
 __all__ = [
     "BaseReward",
+    "CausalReward",
+    "EmptyRewardObservation",
+    "EmptyRewardState",
+    "LegRewardObservation",
+    "LegRewardState",
     "LegSettlementReward",
     "Payments",
+    "RewardDynamics",
     "RewardFn",
+    "StatelessReward",
+    "default_reward",
 ]

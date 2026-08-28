@@ -20,6 +20,7 @@ from functools import cached_property
 from typing import Any, Dict, Union
 
 import chex
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 from jumanji import specs
@@ -151,8 +152,47 @@ class MarlObserver(Observer):
             solar_obs.sol_realized,
             solar_obs.sol_request_max,
         ]
+        parts.extend(self._action_bounds(state))
 
+        # The reward observation is deliberately NOT here. Under a settlement
+        # reward that would hand the agent its own price the instant it is
+        # computed, and a mechanism meant to be anticipated rather than
+        # reacted to has nothing left to anticipate. The critic gets it via
+        # `global_state`, where seeing it is what keeps value estimates
+        # Markov; the actor does not.
         return jnp.stack(parts, axis=-1)
+
+    def _action_bounds(self, state: EnvironmentState) -> list[chex.Array]:
+        """The agent's actual feasible active-power interval for the coming
+        interval, as ``[minimum, maximum]`` -- or nothing when the action
+        space is two-dimensional.
+
+        Not the same thing as the `p_inv_min` / `p_inv_max` already in the
+        view above. Those are the INVERTER's own range; `action_constraints`
+        is that range augmented with the grid connection limit and then
+        reduced by the grid code, with the Q(U) setpoint's share of the
+        apparent power already carved out. It is strictly narrower, and it is
+        the one an action is actually checked against. Without it in the
+        view, a policy reads `p_inv_max` as "how much may I inject", requests
+        more than it may, and the projection absorbs the difference in
+        silence -- the request is never infeasible, it is just quietly not
+        what was asked for.
+
+        Restricted to ``action_dim == 1`` because that is where the question
+        has an answer: `ActionConstraints.bounds` is exact in one dimension
+        and computes a superset of the feasible set in more (see its
+        docstring), so reporting it under `NoGridCode` would report bounds
+        the agent can act inside and still be infeasible.
+        """
+        if self._env_model.action_dim != 1:
+            return []
+        minimum, maximum = state.action_constraints.bounds()
+        if self._normalize:
+            return [minimum, maximum]
+        # action_constraints live in [-1, 1] action space; the rest of an
+        # unnormalized view is in kWh, so these must be too.
+        scale = jnp.asarray(self._env_model.action_scale)
+        return [minimum * scale, maximum * scale]
 
     def _global_state(self, state: EnvironmentState) -> chex.Array:
         env_obs = self._env_model.observation(state)
@@ -195,6 +235,11 @@ class MarlObserver(Observer):
             solar_obs.sol_realized,
             solar_obs.sol_request_max,
         ]
+        # Unlike `agents_view`, the critic DOES see what the reward published.
+        # A centralised critic that cannot see the settlement state is
+        # estimating values for a process that is not Markov in its own input.
+        published = jax.tree_util.tree_leaves(env_obs.reward_observation)
+        parts.extend(jnp.ravel(leaf) for leaf in published)
 
         row = jnp.concatenate([jnp.ravel(part) for part in parts])
         return jnp.tile(row, (num_agents, 1))

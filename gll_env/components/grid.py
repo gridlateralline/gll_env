@@ -60,10 +60,21 @@ class GridObservation:
             deviation divided by ``voltage_deviation_ref_pu``.
         bus_voltage_angle: Past-interval bus voltage angle. Unnormalized values are in radians;
             normalized values are in ``[-1, 1]`` after division by pi.
-        bus_active_power_injection: Past-interval real bus power injection.
-            Unnormalized values are in kW; normalized values are in per-unit power.
-        bus_reactive_power_injection: Past-interval reactive bus power injection.
-            Unnormalized values are in kvar; normalized values are in per-unit power.
+        bus_active_power_injection: Past-interval real bus energy injection.
+            Unnormalized values are in kWh; normalized values are in per-unit power.
+        bus_reactive_power_injection: Past-interval reactive bus energy injection.
+            Unnormalized values are in kvarh; normalized values are in per-unit power.
+
+            Per-INTERVAL energy, not power, matching every other component's
+            observation in this tree. The two describe the same quantity a
+            step_duration_h apart, and reporting power here while
+            ProsumerObservation reports energy made
+            ``bus_active_power_injection[pq_id]`` and ``p_pq_realized`` differ
+            by a factor of four at 15-minute steps -- two adjacent features of
+            the same flow, in the same agent view, silently disagreeing.
+            Invisible once normalized, since each was divided by its own base,
+            which is why it survived. Normalization is unchanged by this: the
+            divisor moved by exactly the same factor.
         is_normalized: Defaults to ``False``.
     """
 
@@ -84,10 +95,10 @@ class GridObservation:
                 self.bus_voltage_angle, jnp.asarray(jnp.pi, dtype=jnp.float32)
             ),
             bus_active_power_injection=safe_normalize(
-                self.bus_active_power_injection, grid_dynamics.base_s_mva * 1000.0
+                self.bus_active_power_injection, grid_dynamics.pu_to_kwh(1.0)
             ),
             bus_reactive_power_injection=safe_normalize(
-                self.bus_reactive_power_injection, grid_dynamics.base_s_mva * 1000.0
+                self.bus_reactive_power_injection, grid_dynamics.pu_to_kwh(1.0)
             ),
             is_normalized=True,
         )
@@ -258,8 +269,8 @@ class GridDynamics:
                 jnp.asarray(self.base_v_kv, dtype=jnp.float32),
             ),
             bus_voltage_angle=jnp.angle(state.bus_voltage_pu),
-            bus_active_power_injection=self.pu_to_kw(state.bus_power_injection_pu.real),
-            bus_reactive_power_injection=self.pu_to_kw(state.bus_power_injection_pu.imag),
+            bus_active_power_injection=self.pu_to_kwh(state.bus_power_injection_pu.real),
+            bus_reactive_power_injection=self.pu_to_kwh(state.bus_power_injection_pu.imag),
         )
 
     def reset(self) -> GridState:

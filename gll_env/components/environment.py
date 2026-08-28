@@ -60,7 +60,8 @@ from gll_env.components.prosumer import (
     ProsumerState,
 )
 from gll_env.grid_codes.base import GridCode, NoGridCode
-from gll_env.types import ActionConstraints
+from gll_env.rewards.base import RewardDynamics, default_reward
+from gll_env.types import ActionConstraints, RewardObservation, RewardState
 
 
 @chex.dataclass(frozen=True)
@@ -83,6 +84,14 @@ class EnvironmentState(StateProtocol):
     # their agreement an invariant to maintain instead of a fact.
     q_setpoint_kvarh: chex.Array
 
+    # The reward component's own memory. Held here rather than threaded
+    # alongside the state because a reward that depends on history is not a
+    # function of the transition alone: kept outside, the environment stops
+    # being Markov and stops being reproducible from reset(key). A stateless
+    # reward pays nothing for this -- EmptyRewardState is a pytree with no
+    # leaves.
+    reward_state: RewardState
+
     step_count: chex.Numeric  # () int32
     valid: chex.Array  # () bool
     key: chex.PRNGKey  # (2,)
@@ -99,6 +108,10 @@ class EnvironmentObservation:
             observation is normalized.
         time_observation: Nested daytime observation, normalized when this
             observation is normalized.
+        reward_observation: Nested reward observation, normalized when this
+            observation is normalized. Empty unless the reward in force
+            publishes something, so the observation width is unchanged for
+            every configuration that predates the reward becoming a component.
         step_count: Number of completed simulation steps; unchanged by
             normalization.
         is_normalized: Defaults to ``False``.
@@ -107,6 +120,7 @@ class EnvironmentObservation:
     time_observation: DaytimeObservation
     grid_observation: GridObservation
     prosumer_observation: ProsumerObservation
+    reward_observation: RewardObservation
     step_count: chex.Numeric  # () int32
     is_normalized: bool = field(default=False)
 
@@ -115,6 +129,7 @@ class EnvironmentObservation:
             time_observation=self.time_observation.normalize(environment_model.time),
             grid_observation=self.grid_observation.normalize(environment_model.grid),
             prosumer_observation=self.prosumer_observation.normalize(environment_model.prosumer),
+            reward_observation=self.reward_observation.normalize(environment_model.reward),
             step_count=self.step_count,
             is_normalized=True,
         )
@@ -126,11 +141,24 @@ class EnvironmentDynamics:
     grid: GridDynamics
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)
     grid_code: GridCode = field(default_factory=NoGridCode)
+    # A rule, like grid_code, and injected the same way. Held here rather than
+    # on ProsumerGrid so that reset/step/observation stay self-contained --
+    # the observer derives its spec from a bare model, and would not otherwise
+    # see the reward's state or its published observation.
+    reward: RewardDynamics = field(default_factory=default_reward)
 
     def __post_init__(self) -> None:
         chex.assert_equal(self.grid.num_pq, self.prosumer.num_pq)
         chex.assert_equal(self.time.n_steps_per_day, self.prosumer.time.n_steps_per_day)
         chex.assert_equal(self.time.n_steps_per_day, self.grid.time.n_steps_per_day)
+        if self.reward.lookahead != 0:
+            raise ValueError(
+                f"{type(self.reward).__name__} declares lookahead="
+                f"{self.reward.lookahead}, but EnvironmentDynamics settles each interval "
+                "as it ends and cannot see the future. A lookahead reward needs the "
+                "re-timing wrapper described in docs/lookahead_rewards.md; it is not "
+                "implemented yet."
+            )
 
     @cached_property
     def num_agents(self) -> int:
@@ -253,6 +281,7 @@ class EnvironmentDynamics:
             prosumer_observation=self.prosumer.observation(state.prosumer_state),
             grid_observation=self.grid.observation(state.grid_state),
             time_observation=self.time.observation(state.time_state),
+            reward_observation=self.reward.observation(state.reward_state),
             step_count=state.step_count,
         )
 
@@ -274,6 +303,9 @@ class EnvironmentDynamics:
             key, time_key = jr.split(key)
             time_state = self.time.reset(time_key)
 
+        key, reward_key = jr.split(key)
+        reward_state = self.reward.reset(reward_key)
+
         key, prosumer_key = jr.split(key)
         prosumer_state = self.prosumer.reset(key=prosumer_key, time_state=time_state)
         grid_state = self.grid.reset()
@@ -294,13 +326,28 @@ class EnvironmentDynamics:
             prosumer_state=prosumer_state,
             action_constraints=action_constraints,
             q_setpoint_kvarh=q_setpoint_kvarh,
+            reward_state=reward_state,
             step_count=step_count,
             valid=valid,
             key=key,
         )
 
-    def step(self, state: EnvironmentState, action: chex.Array) -> EnvironmentState:
-        """Advance the environment by one simulation interval.
+    def step(
+        self, state: EnvironmentState, action: chex.Array
+    ) -> tuple[EnvironmentState, chex.Array]:
+        """Advance the environment by one simulation interval, and settle it.
+
+        Returns the next state and the ``(num_agents,)`` settlement for the
+        interval that just ended. The reward is produced here rather than by
+        the caller so that the ORDER is a property of the environment and not
+        an invariant every caller has to maintain:
+
+            physics -> settle -> write reward_state -> observe
+
+        The observation must be derived from the state the settlement has
+        already been written into. A reward that publishes anything -- a
+        disclosed bill, a running congestion index -- would otherwise be one
+        interval stale in the observation, silently.
 
         Parameters
         ----------
@@ -342,13 +389,21 @@ class EnvironmentDynamics:
             jnp.logical_and(next_grid_state.valid, next_prosumer_state.valid),
         )
         next_key = jr.fold_in(state.key, state.step_count + 1)
-        return EnvironmentState(
+        next_state = EnvironmentState(
             time_state=next_time_state,
             grid_state=next_grid_state,
             prosumer_state=next_prosumer_state,
             action_constraints=next_action_constraints,
             q_setpoint_kvarh=next_q_setpoint_kvarh,
+            # Carried, not yet updated: the settlement is computed FROM this
+            # state, so it cannot already be in it.
+            reward_state=state.reward_state,
             step_count=next_step_count,
             valid=next_valid,
             key=next_key,
         )
+
+        # `lookahead == 0` is asserted in __post_init__, so the trajectory the
+        # reward needs is exactly this transition and no buffering arises.
+        next_reward_state, reward = self.reward(state.reward_state, (state, next_state), self)
+        return next_state.replace(reward_state=next_reward_state), reward
