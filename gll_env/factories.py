@@ -54,7 +54,7 @@ Config layout::
         newton_raphson: {max_iterations: 10, tolerance: 1.0e-4}   # optional
         v_bus_deviation_pu: 0.1                                   # optional
     grid_code:                       # optional; absent means no law, action_dim 2
-        q_of_u: true                 # NE7 4.3.2 Q(U) curve -> action_dim 1
+        name: ne7                    # NE7 4.3.2 Q(U) curve -> action_dim 1
     prosumer:
         s_pq_max_kVA: 15.0              # scalar or per-pq list
         inverter_id: [0, 1, 2]          # optional, defaults to one inverter per pq bus
@@ -84,11 +84,12 @@ from gll_env.components.battery import BatteryDynamics
 from gll_env.components.day_time import DaytimeDynamics
 from gll_env.components.environment import EnvironmentDynamics
 from gll_env.components.grid import GridDynamics
-from gll_env.components.grid_code import GridCode, QofUCharacteristic, rated_q_max_kvar
 from gll_env.components.inverter import InverterDynamics
 from gll_env.components.load import LoadDynamics
 from gll_env.components.prosumer import ProsumerDynamics
 from gll_env.components.solar import SolarDynamics
+from gll_env.grid_codes.base import GridCode, NoGridCode
+from gll_env.grid_codes.ne7 import Ne7GridCode, QofUCharacteristic, rated_q_max_kvar
 from gll_env.rewards.base import BaseReward, RewardFn
 from gll_env.rewards.leg import LegSettlementReward, Payments
 
@@ -253,29 +254,20 @@ def prosumer_dynamics(
     )
 
 
-def grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
-    """Build the :class:`GridCode` binding the agent's action space.
+def ne7_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
+    """Build the Swiss NE7 grid code (Q(U) per 4.3.2).
 
-    Config (all optional; an absent ``grid_code`` block means no law applies
-    and the agent keeps both degrees of freedom)::
-
-        grid_code:
-            q_of_u: true            # NE7 4.3.2 standard curve -> action_dim 1
-            q_max_kvar: 6.5         # optional override of Tabelle 3's rating-based Q_max
-            voltage_pu: [0.93, 0.97, 1.03, 1.07]   # optional VNB-specific curve
-            q_ratio:   [1.0, 0.0, 0.0, -1.0]       # (NE7 4.3(2) allows per-plant settings)
+    Config: ``q_max_kvar`` (optional per-inverter override of Tabelle 3's
+    rating-based Q_max), ``voltage_pu``/``q_ratio`` (optional VNB-specific
+    curve breakpoints -- 4.3(2) lets the operator set these per plant).
 
     ``q_max_kvar`` defaults to :func:`rated_q_max_kvar` applied to each
-    inverter's own ``s_inv_max_kVA``, which is what Tabelle 3 prescribes --
-    so the standard case needs ``q_of_u: true`` and nothing else.
+    inverter's own ``s_inv_max_kVA``, which is what Tabelle 3 prescribes, so
+    the standard case needs no parameters at all.
     """
-    if not config.get("q_of_u", False):
-        return GridCode()
-
-    num_inv = prosumer.num_inv
     s_inv_max_kva = jnp.asarray(prosumer.inverter_dynamics.s_inv_max_kva, dtype=jnp.float32)
     q_max_kvar = (
-        _broadcast(config.q_max_kvar, (num_inv,))
+        _broadcast(config.q_max_kvar, (prosumer.num_inv,))
         if "q_max_kvar" in config
         else rated_q_max_kvar(s_inv_max_kva)
     )
@@ -284,7 +276,41 @@ def grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
         kwargs["voltage_pu"] = jnp.asarray(config.voltage_pu, dtype=jnp.float32)
     if "q_ratio" in config:
         kwargs["ratio"] = jnp.asarray(config.q_ratio, dtype=jnp.float32)
-    return GridCode(q_of_u=QofUCharacteristic(q_max_kvar=q_max_kvar, **kwargs))
+    return Ne7GridCode(q_of_u=QofUCharacteristic(q_max_kvar=q_max_kvar, **kwargs))
+
+
+def no_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
+    """Build :class:`NoGridCode`, which takes no parameters."""
+    del config, prosumer
+    return NoGridCode()
+
+
+# Grid-code name -> builder, mirroring REWARD_BUILDERS. Add an entry here to
+# make another jurisdiction's ruleset selectable from config.
+GRID_CODE_BUILDERS = {
+    "none": no_grid_code,
+    "ne7": ne7_grid_code,
+}
+
+
+def grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
+    """Build the grid code named by config, defaulting to no law at all.
+
+    Config::
+
+        grid_code:
+            name: ne7        # a key of GRID_CODE_BUILDERS; default "none"
+
+    Omitting the block entirely leaves the agent both degrees of freedom --
+    the environment's original behaviour, and the counterfactual a grid-code
+    run is measured against.
+    """
+    name = str(config.get("name", "none"))
+    if name not in GRID_CODE_BUILDERS:
+        raise ValueError(
+            f"Unknown grid code {name!r}; expected one of {sorted(GRID_CODE_BUILDERS)}."
+        )
+    return GRID_CODE_BUILDERS[name](config, prosumer)
 
 
 def payments(config: DictConfig) -> Payments:

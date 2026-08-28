@@ -13,15 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import chex
 import jax.numpy as jnp
 import pytest
 
-from gll_env.components.grid_code import (
-    GridCode,
+from gll_env.grid_codes.base import NoGridCode
+from gll_env.grid_codes.ne7 import (
+    Ne7GridCode,
     QofUCharacteristic,
     limiting_power_factor,
     rated_q_max_kvar,
 )
+from gll_env.types import ActionConstraints
 
 STEP_DURATION_H = 0.25
 
@@ -117,10 +120,57 @@ def test_negative_q_max_is_clamped_rather_than_inverting_the_control() -> None:
     assert setpoint(curve, 0.90) == pytest.approx(0.0)
 
 
-def test_grid_code_default_leaves_both_degrees_of_freedom_to_the_agent() -> None:
-    assert GridCode().q_of_u is None
-    assert GridCode().action_dim == 2
+def two_dimensional_constraint() -> ActionConstraints:
+    """p in [-3, 5], |s| <= 4 -- a plausible inverter constraint, origin inside."""
+    return ActionConstraints(
+        halfspace_a=jnp.asarray([[[1.0, 0.0], [-1.0, 0.0]]]),
+        halfspace_b=jnp.asarray([[5.0, 3.0]]),
+        ball_center=jnp.zeros((1, 1, 2)),
+        ball_radius=jnp.asarray([[4.0]]),
+    )
 
 
-def test_q_of_u_takes_the_reactive_degree_of_freedom_away() -> None:
-    assert GridCode(q_of_u=characteristic()).action_dim == 1
+def test_no_grid_code_leaves_both_degrees_of_freedom_to_the_agent() -> None:
+    code = NoGridCode()
+    constraints = two_dimensional_constraint()
+    reduced, setpoint = code.reduce(constraints, jnp.asarray([1.0]), STEP_DURATION_H)
+
+    assert code.action_dim == 2
+    assert reduced is constraints  # passed straight through, not rebuilt
+    assert jnp.allclose(setpoint, 0.0)
+
+
+def test_no_grid_code_lift_is_the_identity() -> None:
+    request = jnp.asarray([[1.5, -0.5]])
+    lifted = NoGridCode().lift(request, jnp.asarray([99.0]))
+    assert jnp.allclose(lifted, request)  # the setpoint is ignored; the agent set q
+
+
+def test_ne7_takes_the_reactive_degree_of_freedom_away() -> None:
+    assert Ne7GridCode(q_of_u=characteristic()).action_dim == 1
+
+
+def test_ne7_reduce_returns_a_one_dimensional_box_containing_zero() -> None:
+    code = Ne7GridCode(q_of_u=characteristic())
+    reduced, setpoint = code.reduce(
+        two_dimensional_constraint(), jnp.asarray([0.90]), STEP_DURATION_H
+    )
+    chex.assert_shape(reduced.halfspace_a, (1, 2, 1))
+    chex.assert_shape(reduced.ball_center, (1, 0, 1))
+    assert bool(reduced.feasible_mask(jnp.zeros((1, 1)), tol=0.0)[0])
+    assert float(setpoint[0]) > 0.0  # under-voltage -> supplying reactive power
+
+
+def test_ne7_lift_pairs_the_action_with_the_setpoint() -> None:
+    """lift must invert reduce: the pairing is the ABC's contract."""
+    code = Ne7GridCode(q_of_u=characteristic())
+    constraints = two_dimensional_constraint()
+    reduced, setpoint = code.reduce(constraints, jnp.asarray([0.90]), STEP_DURATION_H)
+
+    p_max = jnp.asarray(reduced.halfspace_b)[:, 0]
+    lifted = code.lift(p_max[:, None], setpoint)
+
+    assert jnp.allclose(lifted[:, 1], setpoint)
+    # An action feasible under the reduced constraint lifts to a request
+    # feasible under the constraint reduce was handed.
+    assert bool(constraints.is_feasible(lifted, tol=1e-5))

@@ -38,4 +38,4 @@
   which makes the non-empty-interval property hold syntactically rather than
   depending on how two equivalent square roots round.
 - NE7 §4.4's P(U) curve is not modelled. At a 15-minute step its delayed
-  application limit-cycles rather than settling; see `components/grid_code.py`.
+  application limit-cycles rather than settling; see `grid_codes/ne7.py`.

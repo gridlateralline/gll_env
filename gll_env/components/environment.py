@@ -30,28 +30,18 @@ s_inv_request_constraint (which is itself built from
 InverterDynamics.step()'s own constraint, augmented with the grid-connection
 ball -- see prosumer.py).
 
-What this class does on top of that depends on `grid_code`:
+What the agent may choose within that is the `grid_code`'s call, not this
+class's. This class supplies the measurement and the physical constraint;
+the code reduces them to the axes the agent still controls and names any
+setpoint it imposed on the rest (`_coming_interval`), and rebuilds the full
+(p, q) request afterwards (`_action_to_request`). `NoGridCode`, the default,
+reduces to nothing and lifts to nothing, which is the two-degree-of-freedom
+action space this environment started with.
 
-* `GridCode()` (the default, no law): action_dim is 2, and this class runs
-  no solver of its own. It scales the normalized [a_p, a_q] into a physical
-  s_inv_request (a pure multiply) and normalizes Prosumer's already-built
-  constraint back down for reporting on EnvironmentState.action_constraints
-  (also a pure scale, not a rebuild). Unchanged from before grid codes
-  existed.
-
-* `GridCode(q_of_u=...)`: action_dim is 1. Reactive power is no longer the
-  agent's to choose -- it is fixed by the Q(U) curve at the voltage measured
-  last interval -- so this class must decide the reactive setpoint, work out
-  what active-power range remains feasible alongside it, and lift the
-  agent's one-dimensional action back into the (p, q) pair Prosumer expects.
-  That is what _grid_code_bounds does, in closed form -- see its docstring
-  for the reasoning, and ActionConstraints.restrict for the geometry it
-  leans on.
-
-Neither case runs a projection here; that remains ProsumerDynamics.step()'s
-job. Under Q(U) it simply finds nothing to do, because the bounds reported
-to the agent were built as a subset of Prosumer's own feasible set rather
-than as an independent guess at it.
+No projection runs here in either case; that remains ProsumerDynamics.step()'s
+job. Under a code that reduces the action space it simply finds nothing to do,
+because the bounds reported to the agent were built as a subset of Prosumer's
+own feasible set rather than as an independent guess at it.
 """
 
 from dataclasses import field
@@ -64,18 +54,13 @@ from jumanji.env import StateProtocol
 
 from gll_env.components.day_time import DaytimeDynamics, DaytimeObservation, DaytimeState
 from gll_env.components.grid import GridDynamics, GridObservation, GridState
-from gll_env.components.grid_code import GridCode
 from gll_env.components.prosumer import (
     ProsumerDynamics,
     ProsumerObservation,
     ProsumerState,
 )
+from gll_env.grid_codes.base import GridCode, NoGridCode
 from gll_env.types import ActionConstraints
-
-# Axis positions inside the (num_agents, 2) s_inv_request the prosumer tree
-# passes around: active power first, reactive second.
-_P_AXIS = 0
-_Q_AXIS = 1
 
 
 @chex.dataclass(frozen=True)
@@ -140,14 +125,12 @@ class EnvironmentDynamics:
     prosumer: ProsumerDynamics
     grid: GridDynamics
     time: DaytimeDynamics = field(default_factory=DaytimeDynamics)
-    grid_code: GridCode = field(default_factory=GridCode)
+    grid_code: GridCode = field(default_factory=NoGridCode)
 
     def __post_init__(self) -> None:
         chex.assert_equal(self.grid.num_pq, self.prosumer.num_pq)
         chex.assert_equal(self.time.n_steps_per_day, self.prosumer.time.n_steps_per_day)
         chex.assert_equal(self.time.n_steps_per_day, self.grid.time.n_steps_per_day)
-        if self.grid_code.q_of_u is not None:
-            chex.assert_equal(self.num_agents, self.grid_code.q_of_u.num_inv)
 
     @cached_property
     def num_agents(self) -> int:
@@ -155,7 +138,7 @@ class EnvironmentDynamics:
 
     @cached_property
     def action_dim(self) -> int:
-        """Degrees of freedom per agent: 1 under Q(U), 2 with no grid code."""
+        """Degrees of freedom per agent, decided by the grid code in force."""
         return self.grid_code.action_dim
 
     @cached_property
@@ -195,66 +178,6 @@ class EnvironmentDynamics:
             jnp.asarray(self.prosumer.inverter_dynamics.s_inv_max_kvah)
         )
 
-    def _grid_code_bounds(
-        self,
-        s_inv_request_constraint: ActionConstraints,
-        bus_voltage_pu: chex.Array,
-    ) -> tuple[ActionConstraints, chex.Array]:
-        """Reduce the 2-D (p, q) constraint to the 1-D active-power box that
-        remains once Q(U) has claimed the reactive axis.
-
-        Returns the physical (num_agents, 1) constraint and the reactive
-        setpoint in kvarh that it was carved out alongside.
-
-        Both steps are exact restrictions of the constraint set to a line --
-        see :meth:`ActionConstraints.restrict` for why that is closed-form
-        rather than a search, and for what `origin_feasible` promises.
-
-        Step 1 picks the setpoint. The Q(U) curve reads voltage alone (see
-        grid_code.py), so it can ask for reactive power the connection cannot
-        carry: it is written against the plant's nameplate rating, which says
-        nothing about the load sharing its meter. Restricting to p = 0 gives
-        the reactive values that leave zero active power feasible, and
-        clamping the curve's target into that range derates it to what the
-        connection can actually absorb.
-
-        That range always contains q = 0, because (0, 0) is feasible --
-        ProsumerDynamics' own proven invariant -- so the clamp is always
-        well-defined and can only pull the setpoint toward the curve's own
-        zero, never past it into the opposite sign.
-
-        Step 2 restricts to q = q* and reads off the active-power range,
-        which is what step 1 earns the right to do with `origin_feasible`:
-        (0, q*) was just established feasible, so p = 0 is guaranteed inside
-        the result. The interval is therefore never empty, with no sizing
-        condition to satisfy, and every point in it is feasible in 2-D --
-        the endpoints by construction, the interior by convexity. That is
-        what leaves Prosumer's own projection with nothing to do.
-
-        Note this is the SLICE at q*, not the shadow of the 2-D set onto the
-        p axis. The slice is the smaller of the two and the correct one: it
-        answers "what active power is available given this reactive
-        setpoint", which is exactly the question the agent faces.
-        """
-        q_of_u = self.grid_code.q_of_u
-        assert q_of_u is not None  # only reached under a Q(U) grid code
-
-        voltage_pu = jnp.abs(jnp.asarray(bus_voltage_pu))[self.agent_bus_id]
-        q_target_kvarh = q_of_u.q_setpoint_kvarh(voltage_pu, self.time.step_duration_h)
-
-        zeros = jnp.zeros((self.num_agents,), dtype=jnp.float32)
-        q_min_kvarh, q_max_kvarh = s_inv_request_constraint.restrict(_P_AXIS, zeros).bounds()
-        # The range provably straddles zero; clamping its ends against 0.0
-        # keeps that true through float error.
-        q_setpoint_kvarh = jnp.clip(
-            q_target_kvarh, jnp.minimum(q_min_kvarh, 0.0), jnp.maximum(q_max_kvarh, 0.0)
-        )
-
-        p_min_kwh, p_max_kwh = s_inv_request_constraint.restrict(
-            _Q_AXIS, q_setpoint_kvarh, origin_feasible=True
-        ).bounds()
-        return ActionConstraints.from_bounds(p_min_kwh, p_max_kwh), q_setpoint_kvarh
-
     def _coming_interval(
         self,
         prosumer_state: ProsumerState,
@@ -263,23 +186,27 @@ class EnvironmentDynamics:
         """The agent-facing action constraints and reactive setpoint for the
         coming interval: (normalized constraints, q_setpoint_kvarh).
 
+        This class supplies the measurement and the physical constraint; the
+        grid code decides what the agent may do with them, and how many
+        degrees of freedom that leaves. Whether any law applies at all is the
+        code's business, not this method's -- NoGridCode passes the
+        constraint straight through.
+
         The voltage read here is the one the power flow just produced, i.e.
         the most recent measurement available. The setpoint derived from it
         is applied during the NEXT interval, so the control lags the
         measurement by exactly one step -- which is what a real Q(U)
         controller does, reacting to measured terminal voltage with a
-        5-second time constant (NE7 §4.3.2(2)) that is fully settled inside a
+        5-second time constant (NE7 4.3.2(2)) that is fully settled inside a
         15-minute interval. It also avoids an algebraic loop: the voltage of
         the coming interval is not knowable without first choosing the
         reactive power that helps determine it.
         """
-        if self.grid_code.q_of_u is None:
-            return (
-                self._normalized_action_constraints(prosumer_state.s_inv_request_constraint),
-                jnp.zeros((self.num_agents,), dtype=jnp.float32),
-            )
-        constraint, q_setpoint_kvarh = self._grid_code_bounds(
-            prosumer_state.s_inv_request_constraint, grid_state.bus_voltage_pu
+        voltage_pu = jnp.abs(jnp.asarray(grid_state.bus_voltage_pu))[self.agent_bus_id]
+        constraint, q_setpoint_kvarh = self.grid_code.reduce(
+            prosumer_state.s_inv_request_constraint,
+            voltage_pu=voltage_pu,
+            step_duration_h=self.time.step_duration_h,
         )
         return self._normalized_action_constraints(constraint), q_setpoint_kvarh
 
@@ -290,18 +217,18 @@ class EnvironmentDynamics:
         :meth:`_normalized_action_constraints` -- see that method's docstring
         for why they must match.
 
-        With no grid code this is the pure scale it has always been. Under
-        Q(U) the action carries active power alone, so the scaled value is
-        paired with the stored reactive setpoint to rebuild the (p, q) pair.
+        The scale is this class's business; rebuilding the full (p, q) pair
+        from whatever axes the agent still controls is the grid code's, and
+        is the exact inverse of the reduction it performed in
+        :meth:`_coming_interval`.
+
         Still no projection either way: any clipping needed happens inside
-        ProsumerDynamics.step(), and under Q(U) there is nothing left to clip
-        because the reported bounds were already a subset of its feasible set.
+        ProsumerDynamics.step(), and under a code that reduces the action
+        space there is nothing left to clip, the reported bounds having been
+        built as a subset of its feasible set.
         """
         s_inv_max_kvah = jnp.asarray(self.prosumer.inverter_dynamics.s_inv_max_kvah)
-        scaled = action * s_inv_max_kvah[:, None]
-        if self.grid_code.q_of_u is None:
-            return scaled
-        return jnp.stack([scaled[:, 0], q_setpoint_kvarh], axis=-1)
+        return self.grid_code.lift(action * s_inv_max_kvah[:, None], q_setpoint_kvarh)
 
     def observation(self, state: EnvironmentState) -> EnvironmentObservation:
         return EnvironmentObservation(

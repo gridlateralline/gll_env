@@ -13,39 +13,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Grid-code control laws — what the connection rules take out of the agent's hands.
+"""VSE/AES NA/EEA-NE7 -- the Swiss low-voltage connection rules.
 
-Today's tariffs (the LEG settlement among them) price only active energy and
-prescribe reactive power by characteristic curve. :class:`QofUCharacteristic`
-implements the Q(U) curve of VSE/AES NA/EEA-NE7 §4.3.2, Abbildung 5
-("Standardeinstellung Q(U)-Kennlinie in Niederspannung"), which reduces the
-agent to a single degree of freedom: active power.
-
-:class:`GridCode` selects which laws apply. Its default — every law ``None`` —
-is no law at all, i.e. the two-degree-of-freedom action space this environment
-has always had, where the agent sets P and Q independently. That is not
-today's legal regime; it is the counterfactual worth measuring against it.
+Implements 4.3.2, Abbildung 5 ("Standardeinstellung Q(U)-Kennlinie in
+Niederspannung"): the plant exchanges reactive power as a function of the
+voltage at its own connection point, which leaves the agent one degree of
+freedom, active power. Today's tariffs, the LEG settlement among them, price
+only active energy and prescribe reactive power exactly this way.
 
 Sign convention
 ---------------
-NE7's figure is drawn in the *Erzeugerzählpfeilsystem* (generator reference
+NE7's figure is drawn in the *Erzeugerzaehlpfeilsystem* (generator reference
 arrows), which is this repo's convention already: positive is out of the
-inverter. So the curve transcribes with no sign flip. ``übererregt``
+inverter. So the curve transcribes with no sign flip. ``uebererregt``
 (over-excited, +Q, supplying reactive power) at low voltage raises it;
 ``untererregt`` (under-excited, -Q, absorbing) at high voltage lowers it.
 
 Not implemented: P(U)
 ---------------------
-NE7 §4.4 mandates a P(U) curve as standard alongside Q(U) — active power
+NE7 4.4 mandates a P(U) curve as standard alongside Q(U) -- active power
 derated linearly from 100% at 1.10 pu to 0 at 1.12 pu. It is deliberately
-absent, and :class:`GridCode` is a holder with room for it rather than a bare
-Q(U) reference so that adding it stays additive.
+absent, and belongs here beside Q(U) when it lands, as another provision of
+this same document.
 
 The reason is the simulation's 15-minute step, not the law. P(U) responds to
-voltage with a 5-second time constant (§4.4(5)), so a real plant settles
+voltage with a 5-second time constant (4.4(5)), so a real plant settles
 *within* one interval, at the fixed point of the curve and the network.
-Applying the cap from the previous interval's voltage instead — the only
-option at this resolution without an inner power-flow loop — has enormous
+Applying the cap from the previous interval's voltage instead -- the only
+option at this resolution without an inner power-flow loop -- has enormous
 loop gain (100% to 0% across 0.02 pu) and produces a period-2 limit cycle:
 measured on the bundled ``cigre_lv_consumer`` feeder, active power alternating
 between 4.465 and 13.000 kWh, voltage swinging 1.043-1.113 pu and sitting
@@ -54,9 +49,9 @@ fixed point (10.820 kWh at a steady 1.097 pu). That is worse than not
 modelling P(U): it would read as compliance in config while behaving like
 neither a compliant plant nor an unregulated one.
 
-Q(U) has no such problem — its loop gain is ≈0.3, so the delayed application
-is a contraction that converges on the same fixed point in a few intervals.
-See ``docs/model_assumptions.md``.
+Q(U) has no such problem -- its loop gain is ~0.3, so the delayed application
+is a contraction that converges on the same fixed point. See
+``docs/model_assumptions.md``.
 """
 
 from dataclasses import field
@@ -64,6 +59,9 @@ from functools import cached_property
 
 import chex
 import jax.numpy as jnp
+
+from gll_env.grid_codes.base import P_AXIS, Q_AXIS, GridCode
+from gll_env.types import ActionConstraints
 
 # NE7 §4.3.2, Abbildung 5. Voltage breakpoints in pu, and the reactive setpoint
 # at each as a signed fraction of q_max_kvar. Between breakpoints the curve is
@@ -133,7 +131,7 @@ class QofUCharacteristic:
     is deliberate: this class knows the plant's rating but not its load or its
     grid-connection limit, so it cannot say what is achievable. Derating
     against the live constraint set happens in
-    :meth:`EnvironmentDynamics._grid_code_bounds`, which has all three.
+    :meth:`Ne7GridCode.reduce`, which has all three.
     """
 
     q_max_kvar: chex.Array  # (num_inv,) float32
@@ -175,24 +173,81 @@ class QofUCharacteristic:
         return ratio * jnp.asarray(self.q_max_kvar) * step_duration_h
 
 
-@chex.dataclass(frozen=True)
-class GridCode:
-    """Which connection rules bind the agent.
+class Ne7GridCode(GridCode):
+    """NE7's rules as they bind the agent: Q(U) claims the reactive axis.
 
-    Every field defaulting to ``None`` means no rule binds, which is the
-    two-degree-of-freedom action space this environment started with. Populate
-    ``q_of_u`` to hand reactive power to the grid code and leave the agent with
-    active power alone.
-
-    A holder rather than a bare ``QofUCharacteristic | None`` because NE7
-    prescribes several independent laws (§4.3 reactive, §4.4 active); only Q(U)
-    is modelled here, and P(U) should slot in beside it without reshaping
-    anything. See this module's docstring for why P(U) is absent.
+    Args:
+        q_of_u: The Q(U) characteristic, per 4.3.2. Build it with
+            :func:`rated_q_max_kvar` to follow Tabelle 3.
     """
 
-    q_of_u: QofUCharacteristic | None = None
+    def __init__(self, q_of_u: QofUCharacteristic) -> None:
+        self._q_of_u = q_of_u
 
-    @cached_property
+    @property
+    def q_of_u(self) -> QofUCharacteristic:
+        return self._q_of_u
+
+    @property
     def action_dim(self) -> int:
-        """Degrees of freedom left to the agent: 1 under Q(U), otherwise 2."""
-        return 2 if self.q_of_u is None else 1
+        return 1  # active power only; Q(U) fixes the rest
+
+    def reduce(
+        self,
+        s_inv_request_constraint: ActionConstraints,
+        voltage_pu: chex.Array,
+        step_duration_h: chex.Numeric,
+    ) -> tuple[ActionConstraints, chex.Array]:
+        """Pick the reactive setpoint and read off the active power left over.
+
+        Both steps are exact restrictions of the constraint set to a line --
+        see :meth:`~gll_env.types.ActionConstraints.restrict` for why that is
+        closed-form rather than a search, and for what `origin_feasible`
+        promises.
+
+        Step 1 picks the setpoint. The curve reads voltage alone, so it can
+        ask for reactive power the connection cannot carry: it is written
+        against the plant's nameplate rating (Tabelle 3), which says nothing
+        about the load sharing its meter. Restricting to p = 0 gives the
+        reactive values that leave zero active power feasible, and clamping
+        the curve's target into that range derates it to what the connection
+        can actually absorb -- which is what a real inverter does, Tabelle 3's
+        Q_max being a capability ceiling rather than a promise the connection
+        can take it.
+
+        That range always contains q = 0, because (0, 0) is feasible --
+        ProsumerDynamics' own proven invariant -- so the clamp is always
+        well-defined and can only pull the setpoint toward the curve's own
+        zero, never past it into the opposite sign.
+
+        Step 2 restricts to q = q* and reads off the active-power range,
+        which is what step 1 earns the right to do with `origin_feasible`:
+        (0, q*) was just established feasible, so p = 0 is guaranteed inside
+        the result. The interval is therefore never empty, with no sizing
+        condition to satisfy, and every point in it is feasible in 2-D -- the
+        endpoints by construction, the interior by convexity. That is what
+        leaves Prosumer's own projection with nothing to do.
+
+        Note this is the SLICE at q*, not the shadow of the 2-D set onto the
+        p axis. The slice is the smaller of the two and the correct one: it
+        answers "what active power is available given this reactive
+        setpoint", which is exactly the question the agent faces.
+        """
+        q_target_kvarh = self._q_of_u.q_setpoint_kvarh(voltage_pu, step_duration_h)
+
+        zeros = jnp.zeros_like(q_target_kvarh)
+        q_min_kvarh, q_max_kvarh = s_inv_request_constraint.restrict(P_AXIS, zeros).bounds()
+        # The range provably straddles zero; clamping its ends against 0.0
+        # keeps that true through float error.
+        q_setpoint_kvarh = jnp.clip(
+            q_target_kvarh, jnp.minimum(q_min_kvarh, 0.0), jnp.maximum(q_max_kvarh, 0.0)
+        )
+
+        p_min_kwh, p_max_kwh = s_inv_request_constraint.restrict(
+            Q_AXIS, q_setpoint_kvarh, origin_feasible=True
+        ).bounds()
+        return ActionConstraints.from_bounds(p_min_kwh, p_max_kwh), q_setpoint_kvarh
+
+    def lift(self, request: chex.Array, q_setpoint_kvarh: chex.Array) -> chex.Array:
+        """Pair the agent's active power with the setpoint Q(U) imposed."""
+        return jnp.stack([jnp.asarray(request)[:, P_AXIS], q_setpoint_kvarh], axis=-1)

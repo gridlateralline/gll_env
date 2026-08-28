@@ -238,7 +238,7 @@ def build_q_of_u_environment(
     config: dict = {
         "n_steps_per_day": 96,
         "grid": {"grid_model": "cigre_lv_consumer"},
-        "grid_code": {"q_of_u": True},
+        "grid_code": {"name": "ne7"},
         "prosumer": {
             "s_pq_max_kVA": s_pq_max_kva,
             "load": {"daily_consumption_kWh": 15.0, "s_load_max_kVA": 15.0},
@@ -256,6 +256,20 @@ def build_q_of_u_environment(
     if q_max_kvar is not None:
         config["grid_code"]["q_max_kvar"] = q_max_kvar
     return environment_model(OmegaConf.create(config))
+
+
+def _reduce(
+    environment: EnvironmentDynamics,
+    constraint: ActionConstraints,
+    bus_voltage_pu: chex.Array,
+) -> tuple[ActionConstraints, chex.Array]:
+    """Run the grid code's reduction with the same bus gather the environment
+    uses, so tests exercise the real seam rather than a hand-built voltage.
+    """
+    voltage_pu = jnp.abs(jnp.asarray(bus_voltage_pu))[environment.agent_bus_id]
+    return environment.grid_code.reduce(
+        constraint, voltage_pu=voltage_pu, step_duration_h=environment.time.step_duration_h
+    )
 
 
 def test_q_of_u_reduces_the_action_space_to_active_power() -> None:
@@ -371,7 +385,6 @@ def test_setpoint_follows_the_curve_from_the_previous_interval_voltage() -> None
     environment = build_q_of_u_environment()
     state = environment.reset(jr.PRNGKey(2))
     q_of_u = environment.grid_code.q_of_u
-    assert q_of_u is not None
 
     voltage_pu = jnp.abs(state.grid_state.bus_voltage_pu)[environment.agent_bus_id]
     target = q_of_u.q_setpoint_kvarh(voltage_pu, environment.time.step_duration_h)
@@ -412,7 +425,7 @@ def test_setpoint_sign_supports_voltage_through_the_real_bus_gather() -> None:
 
     for voltage_pu, expected_sign in ((0.90, 1.0), (1.10, -1.0)):
         bus_voltage_pu = jnp.full_like(state.grid_state.bus_voltage_pu, voltage_pu)
-        _, q_setpoint_kvarh = environment._grid_code_bounds(constraint, bus_voltage_pu)
+        _, q_setpoint_kvarh = _reduce(environment, constraint, bus_voltage_pu)
         assert jnp.all(q_setpoint_kvarh * expected_sign > 0.0), (
             f"at {voltage_pu} pu the setpoint must have sign {expected_sign:+.0f}; "
             "the opposite sign would amplify the deviation instead of opposing it"
@@ -426,7 +439,7 @@ def test_deadband_leaves_the_plant_exchanging_no_reactive_power() -> None:
 
     for voltage_pu in (0.97, 1.00, 1.03):
         bus_voltage_pu = jnp.full_like(state.grid_state.bus_voltage_pu, voltage_pu)
-        _, q_setpoint_kvarh = environment._grid_code_bounds(constraint, bus_voltage_pu)
+        _, q_setpoint_kvarh = _reduce(environment, constraint, bus_voltage_pu)
         assert jnp.allclose(q_setpoint_kvarh, 0.0, atol=1e-5)
 
 
@@ -440,7 +453,7 @@ def test_bounds_widen_when_the_curve_stops_demanding_reactive_power() -> None:
 
     def active_width(voltage_pu: float) -> chex.Array:
         bus_voltage_pu = jnp.full_like(state.grid_state.bus_voltage_pu, voltage_pu)
-        bounds, _ = environment._grid_code_bounds(constraint, bus_voltage_pu)
+        bounds, _ = _reduce(environment, constraint, bus_voltage_pu)
         return jnp.asarray(bounds.halfspace_b).sum(axis=1)
 
     assert jnp.all(active_width(0.90) <= active_width(1.00) + 1e-5)
@@ -452,7 +465,7 @@ def _bisect_extent(
     direction: chex.Array,
     iterations: int = 30,
 ) -> chex.Array:
-    """Independent reference for the closed form in `_grid_code_bounds`.
+    """Independent reference for the closed form in `Ne7GridCode.reduce`.
 
     Walks the ray ``anchor + t * direction`` and keeps the last ``t`` whose
     point the feasibility predicate accepted. Slow and obviously correct: it
@@ -498,7 +511,7 @@ def test_closed_form_bounds_agree_with_an_independent_search() -> None:
         constraint = state.prosumer_state.s_inv_request_constraint
         for voltage_pu in (0.90, 0.95, 1.00, 1.05, 1.10):
             bus_voltage_pu = jnp.full_like(state.grid_state.bus_voltage_pu, voltage_pu)
-            bounds, q_setpoint_kvarh = environment._grid_code_bounds(constraint, bus_voltage_pu)
+            bounds, q_setpoint_kvarh = _reduce(environment, constraint, bus_voltage_pu)
             p_max = jnp.asarray(bounds.halfspace_b)[:, 0]
             p_min = jnp.negative(jnp.asarray(bounds.halfspace_b)[:, 1])
 
@@ -532,7 +545,7 @@ def test_reactive_setpoint_is_the_largest_feasible_point_toward_the_target() -> 
 
     for voltage_pu in (0.90, 1.10):
         bus_voltage_pu = jnp.full_like(state.grid_state.bus_voltage_pu, voltage_pu)
-        _, q_setpoint_kvarh = environment._grid_code_bounds(constraint, bus_voltage_pu)
+        _, q_setpoint_kvarh = _reduce(environment, constraint, bus_voltage_pu)
         origin = jnp.zeros_like(q_setpoint_kvarh)
 
         at_setpoint = jnp.stack([origin, q_setpoint_kvarh], axis=-1)
