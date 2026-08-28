@@ -109,11 +109,6 @@ class MarlObserver(Observer):
         super().__init__(env_model)
         self._normalize = normalize
 
-    @staticmethod
-    def _agent_bus_id(env_model: EnvironmentDynamics) -> chex.Array:
-        """Global bus index of each inverter agent, shape (num_inv,)."""
-        return jnp.take(env_model.grid.pq_id, env_model.prosumer.inverter_id)
-
     def _agents_view(self, state: EnvironmentState) -> chex.Array:
         env_obs = self._env_model.observation(state)
 
@@ -129,7 +124,7 @@ class MarlObserver(Observer):
         solar_obs = inverter_obs.solar_observation
 
         agent_in_pq_id = self._env_model.prosumer.inverter_id
-        agent_in_bus_id = self._agent_bus_id(self._env_model)
+        agent_in_bus_id = self._env_model.agent_bus_id
         num_agents = self._env_model.num_agents
 
         parts = [
@@ -208,7 +203,7 @@ class MarlObserver(Observer):
         num_agents = self._env_model.num_agents
         return MarlObservation(
             agents_view=self._agents_view(state),
-            action_mask=jnp.ones((num_agents, 2), dtype=bool),
+            action_mask=jnp.ones((num_agents, self._env_model.action_dim), dtype=bool),
             global_state=self._global_state(state),
             action_constraints=state.action_constraints,
             step_count=jnp.repeat(state.step_count, num_agents),

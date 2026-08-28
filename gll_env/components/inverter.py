@@ -31,6 +31,13 @@ from gll_env.components.solar import SolarDynamics, SolarObservation, SolarState
 from gll_env.types import ActionConstraints
 from gll_env.utils import safe_normalize
 
+# Column positions inside the (num_inv, 2) s_inv_request this module defines
+# and every layer above passes around: active power first, reactive second.
+# Named here rather than at the call sites because this is where the layout is
+# fixed -- see InverterDynamics.step and _new_request_constraint.
+P_AXIS = 0
+Q_AXIS = 1
+
 
 @chex.dataclass(frozen=True)
 class InverterState:

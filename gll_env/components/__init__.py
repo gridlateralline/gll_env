@@ -25,6 +25,12 @@ Fixed concrete classes — one physics model per role, no swapping::
     SolarDynamics     OU clearness process + cosine day envelope
     LoadDynamics      OU load-factor process modulating an H0 profile
     DaytimeDynamics   Intra-day clock shared by every component above
+
+Every module here is one physics model as a State / Observation / Dynamics
+triple. Rules imposed on the agent from OUTSIDE the physics are not physics
+and do not live here -- see :mod:`gll_env.grid_codes` for what the agent may
+choose, :mod:`gll_env.observer` for what it sees, :mod:`gll_env.rewards` for
+what it earns.
 """
 
 from gll_env.components.battery import BatteryDynamics, BatteryState

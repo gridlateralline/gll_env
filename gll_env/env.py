@@ -85,7 +85,7 @@ class ProsumerGrid(
     shapes Mava's wrapper reads:
 
     * ``agents_view``  — ``(num_agents, NUM_AGENT_FEATURES)`` float32
-    * ``action_mask``  — ``(num_agents, 2)`` bool
+    * ``action_mask``  — ``(num_agents, action_dim)`` bool
     * ``step_count``   — scalar int32 (Mava broadcasts internally)
 
     And :class:`ProsumerGrid` already exposes the two attributes Mava's wrapper
@@ -125,7 +125,13 @@ class ProsumerGrid(
 
     @cached_property
     def action_dim(self) -> int:
-        return 2  # active and reactive power requests
+        """Degrees of freedom per agent, set by the model's grid code: 2
+        (active and reactive power) with no grid code, 1 (active power only)
+        under a Q(U) characteristic, where reactive power is prescribed by
+        the curve rather than chosen. Read off the model for the same reason
+        `num_agents` is -- the scenario decides, not this wrapper.
+        """
+        return self._env_model.action_dim
 
     @cached_property
     def environment(self) -> EnvironmentDynamics:
@@ -152,7 +158,7 @@ class ProsumerGrid(
     def step(
         self, state: EnvironmentState, action: chex.Array
     ) -> tuple[EnvironmentState, TimeStep[AnyObservation]]:
-        chex.assert_shape(action, (self.num_agents, 2))
+        chex.assert_shape(action, (self.num_agents, self.action_dim))
         action = jnp.asarray(action, dtype=jnp.float32)
         new_state = self._env_model.step(state=state, action=action)
 
@@ -191,9 +197,11 @@ class ProsumerGrid(
 
     @cached_property
     def action_spec(self) -> specs.BoundedArray:
-        """Normalised 2-D action per agent: [P_request, Q_request] in [-1, 1]."""
+        """Normalised action per agent in [-1, 1]: [P_request, Q_request],
+        or [P_request] alone when a Q(U) grid code sets the reactive half.
+        """
         return specs.BoundedArray(
-            shape=(self.num_agents, 2),
+            shape=(self.num_agents, self.action_dim),
             dtype=jnp.float32,
             minimum=-1.0,
             maximum=+1.0,
