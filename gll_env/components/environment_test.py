@@ -84,7 +84,7 @@ def test_normalized_constraints_are_equivalent_to_physical_constraints() -> None
     state = environment.reset(jr.PRNGKey(0), time_state=time_state)
 
     normalized_action = jnp.array([[0.25, -0.5]], dtype=jnp.float32)
-    physical_request = environment._action_to_request(normalized_action, state.q_setpoint_kvarh)
+    physical_request = environment._to_request(normalized_action, state.q_setpoint_kvarh)
     normalized_constraints = state.action_constraints
     physical_constraints = state.prosumer_state.s_inv_request_constraint
     scale = jnp.asarray(environment.prosumer.inverter_dynamics.s_inv_max_kvah)
@@ -149,7 +149,7 @@ def test_every_physical_invariant_survives_a_full_day_of_out_of_range_actions() 
 
     The component tests each check one layer against the constraint object it
     was handed. This drives the whole stack the way a training loop does --
-    normalized action in, ``_action_to_request`` scaling, Prosumer's
+    normalized action in, ``_to_request`` scaling, Prosumer's
     projection, Inverter's internal dispatch, the leaves, then power flow --
     and asserts the PHYSICAL invariants on the realized state, which is the
     only place a layer disagreeing with its neighbour would show up.
@@ -224,12 +224,12 @@ def test_every_physical_invariant_survives_a_full_day_of_out_of_range_actions() 
 # ---------------------------------------------------------------------------
 
 
-def build_q_of_u_environment(
+def build_swiss_lv_environment(
     s_pq_max_kva: float = 20.0,
     s_inv_max_kva: float = 15.0,
     q_max_kvar: float | None = None,
 ) -> EnvironmentDynamics:
-    """The default scenario with NE7's Q(U) curve binding the reactive axis.
+    """The default scenario with the Swiss LV code binding the reactive axis.
 
     Parameters let a test push the connection into regimes the default sizing
     never reaches -- an inverter far larger than the connection it hangs off,
@@ -238,7 +238,7 @@ def build_q_of_u_environment(
     config: dict = {
         "n_steps_per_day": 96,
         "grid": {"grid_model": "cigre_lv_consumer"},
-        "grid_code": {"name": "ne7"},
+        "grid_code": {"name": "swiss_lv"},
         "prosumer": {
             "s_pq_max_kVA": s_pq_max_kva,
             "load": {"daily_consumption_kWh": 15.0, "s_load_max_kVA": 15.0},
@@ -266,14 +266,15 @@ def _reduce(
     """Run the grid code's reduction with the same bus gather the environment
     uses, so tests exercise the real seam rather than a hand-built voltage.
     """
-    voltage_pu = jnp.abs(jnp.asarray(bus_voltage_pu))[environment.agent_bus_id]
     return environment.grid_code.reduce(
-        constraint, voltage_pu=voltage_pu, step_duration_h=environment.time.step_duration_h
+        constraint,
+        voltage_pu=environment.agent_voltage_pu(bus_voltage_pu),
+        step_duration_h=environment.time.step_duration_h,
     )
 
 
 def test_q_of_u_reduces_the_action_space_to_active_power() -> None:
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(0))
 
     assert environment.action_dim == 1
@@ -301,7 +302,7 @@ def test_reported_bounds_are_always_feasible_in_the_full_two_dimensional_set() -
     no-op rather than a correction. Checked at both ends of the reported
     interval and at the origin, across a full day.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(0))
 
     for step in range(environment.time.n_steps_per_day // 4):
@@ -324,7 +325,7 @@ def test_reported_interval_always_contains_zero_active_power() -> None:
     """The origin invariant `ActionConstraints` requires, in the 1-D action
     space: p = 0 must stay feasible so the radial map remains well-defined.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(3))
 
     for _ in range(24):
@@ -345,7 +346,7 @@ def test_stays_feasible_when_the_curve_demands_more_than_the_connection_can_carr
     configuration; here it is absorbed by construction. The inverter is also
     four times the connection rating, so the grid-connection ball binds hard.
     """
-    environment = build_q_of_u_environment(s_pq_max_kva=15.1, s_inv_max_kva=60.0, q_max_kvar=60.0)
+    environment = build_swiss_lv_environment(s_pq_max_kva=15.1, s_inv_max_kva=60.0, q_max_kvar=60.0)
     state = environment.reset(jr.PRNGKey(0))
 
     for _ in range(24):
@@ -366,7 +367,7 @@ def test_realized_reactive_power_matches_the_setpoint_the_agent_was_shown() -> N
     power factor -- exactly wrong when the power factor is prescribed. The
     reported bounds being a feasible subset is what prevents that.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(1))
 
     for _ in range(12):
@@ -382,7 +383,7 @@ def test_setpoint_follows_the_curve_from_the_previous_interval_voltage() -> None
     """q* is the curve evaluated at the voltage the power flow just produced --
     one interval of lag, which is what avoids an algebraic loop.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(2))
     q_of_u = environment.grid_code.q_of_u
 
@@ -395,7 +396,7 @@ def test_setpoint_follows_the_curve_from_the_previous_interval_voltage() -> None
 
 
 def test_a_full_day_of_out_of_range_actions_keeps_every_invariant() -> None:
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(7))
     scale = jnp.asarray(environment.prosumer.inverter_dynamics.s_inv_max_kvah)
 
@@ -419,7 +420,7 @@ def test_setpoint_sign_supports_voltage_through_the_real_bus_gather() -> None:
     feeder is stiff enough that ordinary operation rarely leaves the
     0.97-1.03 deadband -- so a passive test would silently check nothing.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(0))
     constraint = state.prosumer_state.s_inv_request_constraint
 
@@ -433,7 +434,7 @@ def test_setpoint_sign_supports_voltage_through_the_real_bus_gather() -> None:
 
 
 def test_deadband_leaves_the_plant_exchanging_no_reactive_power() -> None:
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(0))
     constraint = state.prosumer_state.s_inv_request_constraint
 
@@ -447,7 +448,7 @@ def test_bounds_widen_when_the_curve_stops_demanding_reactive_power() -> None:
     """Reactive power spends apparent-power headroom, so full droop must leave
     strictly less room for active power than the deadband does.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     state = environment.reset(jr.PRNGKey(0))
     constraint = state.prosumer_state.s_inv_request_constraint
 
@@ -465,7 +466,7 @@ def _bisect_extent(
     direction: chex.Array,
     iterations: int = 30,
 ) -> chex.Array:
-    """Independent reference for the closed form in `Ne7GridCode.reduce`.
+    """Independent reference for the closed form in `SwissLvGridCode.reduce`.
 
     Walks the ray ``anchor + t * direction`` and keeps the last ``t`` whose
     point the feasibility predicate accepted. Slow and obviously correct: it
@@ -502,7 +503,7 @@ def test_closed_form_bounds_agree_with_an_independent_search() -> None:
     curve can produce rather than just the deadband the default feeder sits
     in.
     """
-    environment = build_q_of_u_environment()
+    environment = build_swiss_lv_environment()
     inverter = environment.prosumer.inverter_dynamics
     scale = jnp.asarray(inverter.s_inv_max_kvah)
 
@@ -539,7 +540,7 @@ def test_reactive_setpoint_is_the_largest_feasible_point_toward_the_target() -> 
     setpoint further toward the curve's target must leave the feasible set
     whenever the clamp actually bit.
     """
-    environment = build_q_of_u_environment(s_pq_max_kva=15.1, s_inv_max_kva=60.0, q_max_kvar=60.0)
+    environment = build_swiss_lv_environment(s_pq_max_kva=15.1, s_inv_max_kva=60.0, q_max_kvar=60.0)
     state = environment.reset(jr.PRNGKey(0))
     constraint = state.prosumer_state.s_inv_request_constraint
 

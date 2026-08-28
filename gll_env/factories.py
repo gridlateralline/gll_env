@@ -54,7 +54,7 @@ Config layout::
         newton_raphson: {max_iterations: 10, tolerance: 1.0e-4}   # optional
         v_bus_deviation_pu: 0.1                                   # optional
     grid_code:                       # optional; absent means no law, action_dim 2
-        name: ne7                    # NE7 4.3.2 Q(U) curve -> action_dim 1
+        name: swiss_lv               # VSE/AES NA/EEA-NE7 Q(U) -> action_dim 1
     prosumer:
         s_pq_max_kVA: 15.0              # scalar or per-pq list
         inverter_id: [0, 1, 2]          # optional, defaults to one inverter per pq bus
@@ -89,7 +89,11 @@ from gll_env.components.load import LoadDynamics
 from gll_env.components.prosumer import ProsumerDynamics
 from gll_env.components.solar import SolarDynamics
 from gll_env.grid_codes.base import GridCode, NoGridCode
-from gll_env.grid_codes.ne7 import Ne7GridCode, QofUCharacteristic, rated_q_max_kvar
+from gll_env.grid_codes.swiss_lv import (
+    QofUCharacteristic,
+    SwissLvGridCode,
+    rated_q_max_kvar,
+)
 from gll_env.rewards.base import BaseReward, RewardFn
 from gll_env.rewards.leg import LegSettlementReward, Payments
 
@@ -254,12 +258,12 @@ def prosumer_dynamics(
     )
 
 
-def ne7_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
-    """Build the Swiss NE7 grid code (Q(U) per 4.3.2).
+def swiss_lv_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
+    """Build the Swiss low-voltage grid code (VSE/AES NA/EEA-NE7, Q(U) per 4.3.2).
 
     Config: ``q_max_kvar`` (optional per-inverter override of Tabelle 3's
     rating-based Q_max), ``voltage_pu``/``q_ratio`` (optional VNB-specific
-    curve breakpoints -- 4.3(2) lets the operator set these per plant).
+    curve breakpoints -- 4.3(2) lets the VNB set these per plant).
 
     ``q_max_kvar`` defaults to :func:`rated_q_max_kvar` applied to each
     inverter's own ``s_inv_max_kVA``, which is what Tabelle 3 prescribes, so
@@ -276,7 +280,7 @@ def ne7_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
         kwargs["voltage_pu"] = jnp.asarray(config.voltage_pu, dtype=jnp.float32)
     if "q_ratio" in config:
         kwargs["ratio"] = jnp.asarray(config.q_ratio, dtype=jnp.float32)
-    return Ne7GridCode(q_of_u=QofUCharacteristic(q_max_kvar=q_max_kvar, **kwargs))
+    return SwissLvGridCode(q_of_u=QofUCharacteristic(q_max_kvar=q_max_kvar, **kwargs))
 
 
 def no_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
@@ -289,7 +293,7 @@ def no_grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
 # make another jurisdiction's ruleset selectable from config.
 GRID_CODE_BUILDERS = {
     "none": no_grid_code,
-    "ne7": ne7_grid_code,
+    "swiss_lv": swiss_lv_grid_code,
 }
 
 
@@ -299,7 +303,7 @@ def grid_code(config: DictConfig, prosumer: ProsumerDynamics) -> GridCode:
     Config::
 
         grid_code:
-            name: ne7        # a key of GRID_CODE_BUILDERS; default "none"
+            name: swiss_lv   # a key of GRID_CODE_BUILDERS; default "none"
 
     Omitting the block entirely leaves the agent both degrees of freedom --
     the environment's original behaviour, and the counterfactual a grid-code

@@ -23,7 +23,7 @@ see" and "what does the agent get paid". None of the three is physics, which
 is why none of them lives in ``components/``.
 
 Concrete codes live in sibling modules of this package, one per jurisdiction's
-ruleset (see :mod:`gll_env.grid_codes.ne7`), and are selected from config
+ruleset (see :mod:`gll_env.grid_codes.swiss_lv`), and are selected from config
 through :func:`gll_env.factories.grid_code`.
 
 A code owns three things:
@@ -57,11 +57,6 @@ import jax.numpy as jnp
 
 from gll_env.types import ActionConstraints
 
-# Axis positions inside the (num_agents, 2) s_inv_request the prosumer tree
-# passes around: active power first, reactive second.
-P_AXIS = 0
-Q_AXIS = 1
-
 
 class GridCode(abc.ABC):
     """Abstract grid code: the rules binding the agent's action space."""
@@ -86,7 +81,7 @@ class GridCode(abc.ABC):
                 the coming interval, in kWh/kvarh.
             voltage_pu: Shape (num_agents,). Voltage magnitude at each
                 agent's own connection point, measured over the interval that
-                just ended; ``EnvironmentDynamics._coming_interval`` explains
+                just ended; ``EnvironmentDynamics._next_action_constraints`` explains
                 why it is the previous interval's rather than this one's.
             step_duration_h: Interval length, for the power-to-energy
                 conversion every component in this tree works in.

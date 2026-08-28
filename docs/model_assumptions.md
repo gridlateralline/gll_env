@@ -18,14 +18,14 @@
 - `RadialFeasibility` is a radial feasibility map, not a Euclidean nearest
   point projection. It is deliberately used as an accelerated constraint
   enforcement method.
-- The optional Q(U) grid code (VSE/AES NA/EEA-NE7 §4.3.2) reduces the action
+- The optional Q(U) grid code (VSE/AES NA/EEA-NE7 §4.3.2, the Swiss LV connection rules) reduces the action
   space to active power alone. Reactive power follows the standard curve
   evaluated at the voltage measured in the *previous* interval. The real
   control has a 5-second time constant, so it settles well inside a 15-minute
   step; the one-interval lag avoids an algebraic loop between reactive power
   and the voltage it helps set, and the delayed loop is a contraction that
   converges on the same fixed point.
-- `Q_max` follows NE7 Tabelle 3, referenced to the inverter's nameplate
+- `Q_max` follows NA/EEA-NE7 Tabelle 3, referenced to the inverter's nameplate
   apparent power, not to instantaneous active power.
 - The Q(U) setpoint is derated when the grid connection cannot carry it, so
   the curve is followed only as far as apparent-power headroom allows. Real
@@ -38,4 +38,4 @@
   which makes the non-empty-interval property hold syntactically rather than
   depending on how two equivalent square roots round.
 - NE7 §4.4's P(U) curve is not modelled. At a 15-minute step its delayed
-  application limit-cycles rather than settling; see `grid_codes/ne7.py`.
+  application limit-cycles rather than settling; see `grid_codes/swiss_lv.py`.

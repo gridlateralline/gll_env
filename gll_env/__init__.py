@@ -55,6 +55,7 @@ import jumanji
 
 from gll_env.env import EnvironmentState, ProsumerGrid
 from gll_env.generator import ConfigGenerator, DynamicsGenerator
+from gll_env.grid_codes import GridCode, NoGridCode, SwissLvGridCode
 from gll_env.observer import MarlObserver, RawObserver
 from gll_env.rewards import BaseReward, LegSettlementReward, Payments, RewardFn
 
@@ -69,10 +70,13 @@ __all__ = [
     "ConfigGenerator",
     "DynamicsGenerator",
     "EnvironmentState",
+    "GridCode",
     "LegSettlementReward",
     "MarlObserver",
+    "NoGridCode",
     "Payments",
     "ProsumerGrid",
     "RawObserver",
     "RewardFn",
+    "SwissLvGridCode",
 ]

@@ -13,7 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""VSE/AES NA/EEA-NE7 -- the Swiss low-voltage connection rules.
+"""Swiss low-voltage connection rules for generation plants.
+
+Source: VSE/AES **NA/EEA-NE7** (CH 2025) -- *Netzanschluss fuer
+Energieerzeugungsanlagen auf Netzebene 7*, the industry-association template
+for connecting generation to the Swiss low-voltage grid. "NE7" in that
+designator is *Netzebene 7*, the grid level, not the name of a rule; the
+distribution system operator (VNB) adapts the template per plant, which is why
+the curve breakpoints here are parameters rather than constants.
 
 Implements 4.3.2, Abbildung 5 ("Standardeinstellung Q(U)-Kennlinie in
 Niederspannung"): the plant exchanges reactive power as a function of the
@@ -23,7 +30,7 @@ only active energy and prescribe reactive power exactly this way.
 
 Sign convention
 ---------------
-NE7's figure is drawn in the *Erzeugerzaehlpfeilsystem* (generator reference
+The figure is drawn in the *Erzeugerzaehlpfeilsystem* (generator reference
 arrows), which is this repo's convention already: positive is out of the
 inverter. So the curve transcribes with no sign flip. ``uebererregt``
 (over-excited, +Q, supplying reactive power) at low voltage raises it;
@@ -31,12 +38,12 @@ inverter. So the curve transcribes with no sign flip. ``uebererregt``
 
 Not implemented: P(U)
 ---------------------
-NE7 4.4 mandates a P(U) curve as standard alongside Q(U) -- active power
+Section 4.4 mandates a P(U) curve as standard alongside Q(U) -- active power
 derated linearly from 100% at 1.10 pu to 0 at 1.12 pu. It is deliberately
 absent, and belongs here beside Q(U) when it lands, as another provision of
 this same document.
 
-The reason is the simulation's 15-minute step, not the law. P(U) responds to
+The reason is the simulation's 15-minute step, not the rule. P(U) responds to
 voltage with a 5-second time constant (4.4(5)), so a real plant settles
 *within* one interval, at the fixed point of the curve and the network.
 Applying the cap from the previous interval's voltage instead -- the only
@@ -60,7 +67,8 @@ from functools import cached_property
 import chex
 import jax.numpy as jnp
 
-from gll_env.grid_codes.base import P_AXIS, Q_AXIS, GridCode
+from gll_env.components.inverter import P_AXIS, Q_AXIS
+from gll_env.grid_codes.base import GridCode
 from gll_env.types import ActionConstraints
 
 # NE7 §4.3.2, Abbildung 5. Voltage breakpoints in pu, and the reactive setpoint
@@ -81,7 +89,7 @@ RATING_MINIMUM_KVA = 0.8
 
 
 def limiting_power_factor(s_inv_max_kva: chex.Array) -> chex.Array:
-    """NE7 Tabelle 3's cos φ for each inverter, selected by its own rating.
+    """Tabelle 3's cos φ for each inverter, selected by its own rating.
 
     Returns 1.0 below 800 VA — no reactive requirement, hence no reactive
     capability demanded, hence ``q_max_kvar = 0`` and a flat zero curve.
@@ -95,7 +103,7 @@ def limiting_power_factor(s_inv_max_kva: chex.Array) -> chex.Array:
 
 
 def rated_q_max_kvar(s_inv_max_kva: chex.Array) -> chex.Array:
-    """Q_max per NE7 Tabelle 3: ``sin(arccos(cos φ)) * S_Emax``, per inverter.
+    """Q_max per Tabelle 3: ``sin(arccos(cos φ)) * S_Emax``, per inverter.
 
     Referenced to the plant's *nameplate* apparent power, not its instantaneous
     active power — Tabelle 3 is written against ``∑S_Emax`` and Abbildung 3 is
@@ -131,7 +139,7 @@ class QofUCharacteristic:
     is deliberate: this class knows the plant's rating but not its load or its
     grid-connection limit, so it cannot say what is achievable. Derating
     against the live constraint set happens in
-    :meth:`Ne7GridCode.reduce`, which has all three.
+    :meth:`SwissLvGridCode.reduce`, which has all three.
     """
 
     q_max_kvar: chex.Array  # (num_inv,) float32
@@ -173,8 +181,8 @@ class QofUCharacteristic:
         return ratio * jnp.asarray(self.q_max_kvar) * step_duration_h
 
 
-class Ne7GridCode(GridCode):
-    """NE7's rules as they bind the agent: Q(U) claims the reactive axis.
+class SwissLvGridCode(GridCode):
+    """The Swiss LV rules as they bind the agent: Q(U) claims the reactive axis.
 
     Args:
         q_of_u: The Q(U) characteristic, per 4.3.2. Build it with

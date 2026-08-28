@@ -18,9 +18,9 @@ import jax.numpy as jnp
 import pytest
 
 from gll_env.grid_codes.base import NoGridCode
-from gll_env.grid_codes.ne7 import (
-    Ne7GridCode,
+from gll_env.grid_codes.swiss_lv import (
     QofUCharacteristic,
+    SwissLvGridCode,
     limiting_power_factor,
     rated_q_max_kvar,
 )
@@ -43,10 +43,10 @@ def setpoint(curve: QofUCharacteristic, voltage_pu: float) -> float:
     ("s_inv_max_kva", "expected_power_factor"),
     [(0.5, 1.0), (0.8, 1.0), (3.7, 0.95), (15.0, 0.90), (100.0, 0.90)],
 )
-def test_power_factor_follows_ne7_table_3_rating_bands(
+def test_power_factor_follows_table_3_rating_bands(
     s_inv_max_kva: float, expected_power_factor: float
 ) -> None:
-    """NE7 Tabelle 3 widens the required cos phi band as the plant grows."""
+    """Tabelle 3 widens the required cos phi band as the plant grows."""
     actual = limiting_power_factor(jnp.asarray([s_inv_max_kva], dtype=jnp.float32))
     assert float(actual[0]) == pytest.approx(expected_power_factor)
 
@@ -75,7 +75,7 @@ def test_rated_q_max_is_the_reactive_leg_of_the_limiting_power_factor() -> None:
         (1.07, -1.0),  # full under-excited absorption at the upper knee
     ],
 )
-def test_curve_matches_ne7_figure_5_breakpoints(voltage_pu: float, expected_ratio: float) -> None:
+def test_curve_matches_figure_5_breakpoints(voltage_pu: float, expected_ratio: float) -> None:
     curve = characteristic(q_max_kvar=4.0)
     expected = expected_ratio * 4.0 * STEP_DURATION_H
     # abs=1e-5, not tighter: jnp.interp runs in float32, so the ramp midpoints
@@ -146,12 +146,12 @@ def test_no_grid_code_lift_is_the_identity() -> None:
     assert jnp.allclose(lifted, request)  # the setpoint is ignored; the agent set q
 
 
-def test_ne7_takes_the_reactive_degree_of_freedom_away() -> None:
-    assert Ne7GridCode(q_of_u=characteristic()).action_dim == 1
+def test_swiss_lv_takes_the_reactive_degree_of_freedom_away() -> None:
+    assert SwissLvGridCode(q_of_u=characteristic()).action_dim == 1
 
 
-def test_ne7_reduce_returns_a_one_dimensional_box_containing_zero() -> None:
-    code = Ne7GridCode(q_of_u=characteristic())
+def test_swiss_lv_reduce_returns_a_one_dimensional_box_containing_zero() -> None:
+    code = SwissLvGridCode(q_of_u=characteristic())
     reduced, setpoint = code.reduce(
         two_dimensional_constraint(), jnp.asarray([0.90]), STEP_DURATION_H
     )
@@ -161,9 +161,9 @@ def test_ne7_reduce_returns_a_one_dimensional_box_containing_zero() -> None:
     assert float(setpoint[0]) > 0.0  # under-voltage -> supplying reactive power
 
 
-def test_ne7_lift_pairs_the_action_with_the_setpoint() -> None:
+def test_swiss_lv_lift_pairs_the_action_with_the_setpoint() -> None:
     """lift must invert reduce: the pairing is the ABC's contract."""
-    code = Ne7GridCode(q_of_u=characteristic())
+    code = SwissLvGridCode(q_of_u=characteristic())
     constraints = two_dimensional_constraint()
     reduced, setpoint = code.reduce(constraints, jnp.asarray([0.90]), STEP_DURATION_H)
 

@@ -199,7 +199,7 @@ def test_origin_feasible_is_a_no_op_well_inside_the_set() -> None:
 def test_scale_maps_membership_by_the_same_factor() -> None:
     constraints = two_dimensional()
     factor = jnp.asarray([2.0])
-    scaled = constraints.scale(factor)
+    scaled = constraints.normalized_by(factor)
     for point in ([1.0, 0.5], [3.9, 0.0], [-2.5, 1.0], [5.0, 5.0]):
         original = jnp.asarray([point])
         assert bool(constraints.feasible_mask(original)[0]) == bool(
@@ -209,7 +209,7 @@ def test_scale_maps_membership_by_the_same_factor() -> None:
 
 def test_scale_by_zero_collapses_to_the_origin() -> None:
     """A zero rating is a component that can do nothing, not a division error."""
-    scaled = two_dimensional().scale(jnp.asarray([0.0]))
+    scaled = two_dimensional().normalized_by(jnp.asarray([0.0]))
     assert bool(scaled.feasible_mask(jnp.zeros((1, 2)))[0])
     assert jnp.all(jnp.asarray(scaled.ball_radius) == 0.0)
 
@@ -226,8 +226,8 @@ def test_scale_commutes_with_restrict_when_the_value_is_scaled_too() -> None:
     factor = jnp.asarray([2.5])
     value = jnp.asarray([1.5])
 
-    scale_then_restrict = constraints.scale(factor).restrict(axis=1, value=value / factor)
-    restrict_then_scale = constraints.restrict(axis=1, value=value).scale(factor)
+    scale_then_restrict = constraints.normalized_by(factor).restrict(axis=1, value=value / factor)
+    restrict_then_scale = constraints.restrict(axis=1, value=value).normalized_by(factor)
 
     for name in ("halfspace_a", "halfspace_b", "ball_center", "ball_radius"):
         assert jnp.allclose(

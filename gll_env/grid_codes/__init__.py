@@ -25,18 +25,18 @@ than physics, which is why this is not part of ``components/``.
 """
 
 from gll_env.grid_codes.base import GridCode, NoGridCode
-from gll_env.grid_codes.ne7 import (
-    Ne7GridCode,
+from gll_env.grid_codes.swiss_lv import (
     QofUCharacteristic,
+    SwissLvGridCode,
     limiting_power_factor,
     rated_q_max_kvar,
 )
 
 __all__ = [
     "GridCode",
-    "Ne7GridCode",
     "NoGridCode",
     "QofUCharacteristic",
+    "SwissLvGridCode",
     "limiting_power_factor",
     "rated_q_max_kvar",
 ]

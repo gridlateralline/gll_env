@@ -33,8 +33,8 @@ ball -- see prosumer.py).
 What the agent may choose within that is the `grid_code`'s call, not this
 class's. This class supplies the measurement and the physical constraint;
 the code reduces them to the axes the agent still controls and names any
-setpoint it imposed on the rest (`_coming_interval`), and rebuilds the full
-(p, q) request afterwards (`_action_to_request`). `NoGridCode`, the default,
+setpoint it imposed on the rest (`_next_action_constraints`), and rebuilds the full
+(p, q) request afterwards (`_to_request`). `NoGridCode`, the default,
 reduces to nothing and lifts to nothing, which is the two-degree-of-freedom
 action space this environment started with.
 
@@ -142,6 +142,20 @@ class EnvironmentDynamics:
         return self.grid_code.action_dim
 
     @cached_property
+    def action_scale(self) -> chex.Array:
+        """The factor relating the agent's [-1, 1] action space to physical
+        units, shape (num_agents,).
+
+        A single named source for both halves of that bijection --
+        :meth:`_to_action_space` divides by it,
+        :meth:`_to_request` multiplies by it. They have to agree, or
+        the constraints reported to the agent and the request produced from an
+        action inside them would describe different sets; reading one property
+        is what makes agreeing the default rather than something to maintain.
+        """
+        return jnp.asarray(self.prosumer.inverter_dynamics.s_inv_max_kvah)
+
+    @cached_property
     def agent_bus_id(self) -> chex.Array:
         """Global bus index of each inverter agent, shape (num_inv,).
 
@@ -152,17 +166,24 @@ class EnvironmentDynamics:
         """
         return jnp.take(self.grid.pq_id, self.prosumer.inverter_id)
 
-    def _normalized_action_constraints(
-        self, s_inv_request_constraint: ActionConstraints
-    ) -> ActionConstraints:
-        """Normalize a physical constraint into [-1, 1]^action_dim action space.
+    def agent_voltage_pu(self, bus_voltage_pu: chex.Array) -> chex.Array:
+        """Voltage magnitude at each agent's own connection point, shape
+        (num_agents,), gathered from a full (num_bus,) bus voltage array.
 
-        All this method decides is the scale; the transform itself is
-        :meth:`ActionConstraints.scale`. The choice matters more than the
-        arithmetic: it must be the same s_inv_max_kvah
-        :meth:`_action_to_request` multiplies back by, or the reported
-        constraints and the physical request produced from an action inside
-        them would describe different sets.
+        The measurement a grid code reads. Named rather than inlined because
+        it is the input to :meth:`GridCode.reduce`, and anything checking that
+        reduction should feed it the same gather the environment does instead
+        of rebuilding it.
+        """
+        return jnp.abs(jnp.asarray(bus_voltage_pu))[self.agent_bus_id]
+
+    def _to_action_space(self, s_inv_request_constraint: ActionConstraints) -> ActionConstraints:
+        """Map a physical constraint into [-1, 1]^action_dim action space.
+
+        The inverse of :meth:`_to_request`, and deliberately named as one:
+        the transform is :meth:`ActionConstraints.normalized_by` and the
+        factor is :attr:`action_scale`, shared between them so the two
+        directions cannot drift apart.
 
         Takes whichever constraint describes the agent's actual freedom --
         Prosumer's own 2-D s_inv_request_constraint with no grid code, or the
@@ -174,17 +195,17 @@ class EnvironmentDynamics:
         job in both cases -- though under Q(U) it finds nothing to do, the
         bounds having already been built as a feasible subset.
         """
-        return s_inv_request_constraint.scale(
-            jnp.asarray(self.prosumer.inverter_dynamics.s_inv_max_kvah)
-        )
+        return s_inv_request_constraint.normalized_by(self.action_scale)
 
-    def _coming_interval(
+    def _next_action_constraints(
         self,
         prosumer_state: ProsumerState,
         grid_state: GridState,
     ) -> tuple[ActionConstraints, chex.Array]:
-        """The agent-facing action constraints and reactive setpoint for the
-        coming interval: (normalized constraints, q_setpoint_kvarh).
+        """The agent-facing action constraints for the COMING interval, and
+        the reactive setpoint they were carved out alongside -- the two
+        fields EnvironmentState stores as a pair, returned as one so they
+        cannot be derived from different voltages.
 
         This class supplies the measurement and the physical constraint; the
         grid code decides what the agent may do with them, and how many
@@ -202,33 +223,30 @@ class EnvironmentDynamics:
         the coming interval is not knowable without first choosing the
         reactive power that helps determine it.
         """
-        voltage_pu = jnp.abs(jnp.asarray(grid_state.bus_voltage_pu))[self.agent_bus_id]
         constraint, q_setpoint_kvarh = self.grid_code.reduce(
             prosumer_state.s_inv_request_constraint,
-            voltage_pu=voltage_pu,
+            voltage_pu=self.agent_voltage_pu(grid_state.bus_voltage_pu),
             step_duration_h=self.time.step_duration_h,
         )
-        return self._normalized_action_constraints(constraint), q_setpoint_kvarh
+        return self._to_action_space(constraint), q_setpoint_kvarh
 
-    def _action_to_request(self, action: chex.Array, q_setpoint_kvarh: chex.Array) -> chex.Array:
+    def _to_request(self, action: chex.Array, q_setpoint_kvarh: chex.Array) -> chex.Array:
         """Scale a normalized (num_agents, action_dim) action in [-1, 1] into
         the physical (num_agents, 2) s_inv_request ProsumerDynamics.step()
-        expects, using the same s_inv_max_kvah scalar as
-        :meth:`_normalized_action_constraints` -- see that method's docstring
-        for why they must match.
+        expects, by the same :attr:`action_scale`
+        :meth:`_to_action_space` divides by.
 
         The scale is this class's business; rebuilding the full (p, q) pair
         from whatever axes the agent still controls is the grid code's, and
         is the exact inverse of the reduction it performed in
-        :meth:`_coming_interval`.
+        :meth:`_next_action_constraints`.
 
         Still no projection either way: any clipping needed happens inside
         ProsumerDynamics.step(), and under a code that reduces the action
         space there is nothing left to clip, the reported bounds having been
         built as a subset of its feasible set.
         """
-        s_inv_max_kvah = jnp.asarray(self.prosumer.inverter_dynamics.s_inv_max_kvah)
-        return self.grid_code.lift(action * s_inv_max_kvah[:, None], q_setpoint_kvarh)
+        return self.grid_code.lift(action * self.action_scale[:, None], q_setpoint_kvarh)
 
     def observation(self, state: EnvironmentState) -> EnvironmentObservation:
         return EnvironmentObservation(
@@ -264,7 +282,9 @@ class EnvironmentDynamics:
             p_pq_request_kwh=prosumer_state.s_pq_realized_kvah.real,
             q_pq_request_kvarh=prosumer_state.s_pq_realized_kvah.imag,
         )
-        action_constraints, q_setpoint_kvarh = self._coming_interval(prosumer_state, grid_state)
+        action_constraints, q_setpoint_kvarh = self._next_action_constraints(
+            prosumer_state, grid_state
+        )
 
         step_count = jnp.asarray(0, dtype=jnp.int32)
         valid = jnp.logical_and(grid_state.valid, prosumer_state.valid)
@@ -289,13 +309,13 @@ class EnvironmentDynamics:
             the [a_p, a_q] request per agent with no grid code, or [a_p]
             alone under Q(U), where the reactive half comes from
             state.q_setpoint_kvarh instead. Scaled to a physical
-            s_inv_request (see _action_to_request) and dispatched directly
+            s_inv_request (see _to_request) and dispatched directly
             into ProsumerDynamics.step(), which enforces feasibility itself.
         """
         chex.assert_shape(action, (self.num_agents, self.action_dim))
         chex.assert_type(action, jnp.float32)
 
-        s_inv_request = self._action_to_request(action, state.q_setpoint_kvarh)
+        s_inv_request = self._to_request(action, state.q_setpoint_kvarh)
 
         next_time_state = self.time.step(state.time_state)
         next_prosumer_state = self.prosumer.step(
@@ -308,7 +328,7 @@ class EnvironmentDynamics:
             p_pq_request_kwh=next_prosumer_state.s_pq_realized_kvah.real,
             q_pq_request_kvarh=next_prosumer_state.s_pq_realized_kvah.imag,
         )
-        next_action_constraints, next_q_setpoint_kvarh = self._coming_interval(
+        next_action_constraints, next_q_setpoint_kvarh = self._next_action_constraints(
             next_prosumer_state, next_grid_state
         )
         next_step_count = jnp.asarray(state.step_count + 1, dtype=jnp.int32)

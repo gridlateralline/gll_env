@@ -107,8 +107,12 @@ class ActionConstraints:
         )
         return jnp.logical_and(halfspace_ok, ball_ok)
 
-    def scale(self, factor: chex.Array) -> "ActionConstraints":
+    def normalized_by(self, factor: chex.Array) -> "ActionConstraints":
         """Divide the action space by a positive per-agent `factor`.
+
+        Named for the direction rather than the operation: ``scale`` would
+        leave a reader guessing whether a factor of 2 grows or shrinks the
+        set, and it shrinks it.
 
         Parameters
         ----------
